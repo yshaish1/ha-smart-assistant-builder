@@ -40,14 +40,22 @@ export interface Room {
 export interface Dashboard {
   id: string;
   name: string;
-  order: number;
+  icon?: string;
   rooms: Room[];
 }
 
-export interface StoredConfig {
+export interface ManagedDashboard {
+  urlPath: string;
+  title: string;
+  icon: string;
+  dashboard: Dashboard;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ManagedConfig {
   schemaVersion: number;
-  activeDashboardId: string;
-  dashboards: Dashboard[];
+  dashboards: ManagedDashboard[];
 }
 
 export interface HassEntity {

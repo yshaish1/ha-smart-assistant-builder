@@ -2,50 +2,40 @@ import { LitElement, css, html, type TemplateResult } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { HassAdapter } from './ha/adapter.js';
 import { RealHassAdapter, type HassLike } from './ha/adapter.real.js';
-import { listRealDevices } from './ha/filter.js';
-import { MockHistorySource, type HistorySource } from './ha/history.js';
-import type { Dashboard, RealDevice, StoredConfig, Tile } from './types.js';
-import {
-  addDashboard,
-  deleteDashboard,
-  deleteTile,
-  emptyConfig,
-  getActive,
-  moveTile,
-  renameDashboard,
-  replaceDashboard,
-  setActive,
-} from './store/dashboards.js';
-import type { ConfigStorage } from './store/storage.js';
+import type { Dashboard, ManagedDashboard } from './types.js';
+import { ManagedConfigStore } from './store/managed.js';
 import { LocalConfigStorage } from './store/storage.local.js';
 import { HaConfigStorage } from './store/storage.ha.js';
-import './components/dashboard-tile.js';
-import './components/detail-sheet.js';
-import './components/sparkline.js';
+import {
+  createDashboard,
+  deleteDashboard as apiDeleteDashboard,
+  getConfig,
+  listDashboards,
+  saveConfig,
+  slugify,
+} from './lovelace/api.js';
+import { generateLovelaceConfig, isSabManagedConfig, SAB_MARKER_KEY } from './lovelace/generator.js';
 import './wizard/wizard.js';
+
+const RTL_LANGS = new Set(['he', 'ar', 'fa', 'ur']);
 
 @customElement('smart-assistant-panel')
 export class SmartAssistantPanel extends LitElement {
-  /** Mock injection (used by dev shell). */
+  /** Mock injection for the dev shell. */
   @property({ attribute: false }) adapter?: HassAdapter;
   /** HA injects this when registered as a custom panel. */
   @property({ attribute: false }) hass?: HassLike;
-  /** HA also passes these. */
   @property({ type: Boolean }) narrow = false;
   @property({ attribute: false }) panel?: unknown;
   @property({ attribute: false }) route?: unknown;
 
-  @state() private config: StoredConfig | null = null;
-  @state() private devices: RealDevice[] = [];
-  @state() private editMode = false;
+  @state() private managed: ManagedDashboard[] = [];
   @state() private wizardOpen = false;
-  @state() private detailDevice: RealDevice | null = null;
-  @state() private renamingDashboard = false;
+  @state() private editing: ManagedDashboard | null = null;
+  @state() private error: string | null = null;
 
-  private storage: ConfigStorage = new LocalConfigStorage();
-  private historySource: HistorySource = new MockHistorySource();
+  private store: ManagedConfigStore = new ManagedConfigStore(new LocalConfigStorage());
   private realAdapter?: RealHassAdapter;
-  private unsubscribe?: () => void;
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -54,319 +44,238 @@ export class SmartAssistantPanel extends LitElement {
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
-    this.unsubscribe?.();
     this.realAdapter?.dispose();
   }
 
   override updated(changed: Map<string, unknown>): void {
-    if (changed.has('hass') && this.hass && !this.adapter) {
-      if (!this.realAdapter) {
-        this.realAdapter = new RealHassAdapter(this.hass);
-        this.storage = new HaConfigStorage(this.hass);
-        void this.realAdapter.loadRegistries().then(() => {
-          this.adapter = this.realAdapter;
-          this.attachAdapter();
-          void this.reloadConfig();
-          this.refresh();
-        });
-      } else {
-        this.realAdapter.setHass(this.hass);
+    if (changed.has('hass') && this.hass) {
+      this.applyDirection(this.hass);
+      if (!this.adapter) {
+        if (!this.realAdapter) {
+          this.realAdapter = new RealHassAdapter(this.hass);
+          this.store.setStorage(new HaConfigStorage(this.hass));
+          void this.realAdapter.loadRegistries().then(async () => {
+            this.adapter = this.realAdapter;
+            await this.loadManaged();
+          });
+        } else {
+          this.realAdapter.setHass(this.hass);
+        }
       }
     }
-    if (changed.has('adapter')) {
-      this.attachAdapter();
-      this.refresh();
-    }
+  }
+
+  private applyDirection(hass: HassLike): void {
+    const lang = ((hass as unknown as { language?: string; locale?: { language?: string } }).language
+      ?? (hass as unknown as { locale?: { language?: string } }).locale?.language ?? 'en').slice(0, 2);
+    const dir = RTL_LANGS.has(lang) ? 'rtl' : 'ltr';
+    if (this.dir !== dir) this.dir = dir;
   }
 
   private async bootstrap(): Promise<void> {
-    await this.reloadConfig();
-    if (this.adapter) {
-      this.attachAdapter();
-      this.refresh();
-    }
+    await this.loadManaged();
   }
 
-  private async reloadConfig(): Promise<void> {
-    let cfg = await this.storage.load();
-    if (!cfg) {
-      cfg = emptyConfig();
-      await this.storage.save(cfg);
-    }
-    this.config = cfg;
+  private async loadManaged(): Promise<void> {
+    const cfg = await this.store.load();
+    this.managed = cfg.dashboards.slice().sort((a, b) => a.title.localeCompare(b.title));
   }
 
-  private attachAdapter(): void {
-    this.unsubscribe?.();
-    if (!this.adapter) return;
-    this.unsubscribe = this.adapter.subscribe(() => this.refresh());
-  }
-
-  private refresh(): void {
-    if (!this.adapter) { this.devices = []; return; }
-    this.devices = listRealDevices(this.adapter);
-  }
-
-  private async saveConfig(next: StoredConfig): Promise<void> {
-    this.config = next;
-    await this.storage.save(next);
-  }
-
-  private get active(): Dashboard | null {
-    return this.config ? getActive(this.config) : null;
-  }
-
-  private deviceFor(entityId: string): RealDevice | undefined {
-    return this.devices.find(d => d.entityId === entityId);
-  }
-
-  private async onTilePrimary(tile: Tile): Promise<void> {
-    if (!this.adapter) return;
-    const d = this.deviceFor(tile.entityId);
-    if (!d) return;
-    const data = { entity_id: d.entityId };
-    switch (d.family) {
-      case 'light':
-      case 'switch':
-      case 'fan':
-        await this.adapter.callService(d.family, 'toggle', data); break;
-      case 'lock':
-        await this.adapter.callService('lock', d.state === 'locked' ? 'unlock' : 'lock', data); break;
-      case 'cover':
-        await this.adapter.callService('cover', d.state === 'closed' ? 'open_cover' : 'close_cover', data); break;
-      case 'media':
-        await this.adapter.callService('media_player', 'media_play_pause', data); break;
-      case 'climate':
-      case 'vacuum':
-      case 'sensor':
-      case 'binary_sensor':
-        // tap on read-only / multi-state opens the detail sheet
-        this.detailDevice = d; break;
-    }
-  }
-
-  private async onTileSlider(tile: Tile, value: number): Promise<void> {
-    if (!this.adapter) return;
-    const d = this.deviceFor(tile.entityId);
-    if (!d) return;
-    if (d.family === 'light') {
-      const brightness = Math.round((value / 100) * 255);
-      await this.adapter.callService('light', 'turn_on', { entity_id: d.entityId, brightness });
-    } else if (d.family === 'fan') {
-      await this.adapter.callService('fan', 'set_percentage', { entity_id: d.entityId, percentage: Math.round(value) });
-    } else if (d.family === 'cover') {
-      await this.adapter.callService('cover', 'set_cover_position', { entity_id: d.entityId, position: Math.round(value) });
-    }
-  }
-
-  private onTileLongPress(tile: Tile): void {
-    const d = this.deviceFor(tile.entityId);
-    if (d) this.detailDevice = d;
-  }
-
-  private async onTileDelete(tile: Tile): Promise<void> {
-    if (!this.config || !this.active) return;
-    const room = this.active.rooms.find(r => r.tiles.some(t => t.id === tile.id));
-    if (!room) return;
-    const next = deleteTile(this.active, room.id, tile.id);
-    await this.saveConfig(replaceDashboard(this.config, next));
-  }
-
-  // drag-and-drop reorder
-  private dragSourceRoom: string | null = null;
-  private dragSourceIdx = -1;
-
-  private onTileDragStart(roomId: string, idx: number, e: DragEvent): void {
-    if (!this.editMode) return;
-    this.dragSourceRoom = roomId;
-    this.dragSourceIdx = idx;
-    e.dataTransfer?.setData('text/plain', `${roomId}:${idx}`);
-    if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
-  }
-
-  private onTileDragOver(e: DragEvent): void {
-    if (!this.editMode) return;
-    e.preventDefault();
-    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
-  }
-
-  private async onTileDrop(roomId: string, idx: number, e: DragEvent): Promise<void> {
-    if (!this.editMode || !this.config || !this.active) return;
-    e.preventDefault();
-    if (this.dragSourceRoom !== roomId || this.dragSourceIdx < 0) return;
-    if (this.dragSourceIdx === idx) return;
-    const next = moveTile(this.active, roomId, this.dragSourceIdx, idx);
-    await this.saveConfig(replaceDashboard(this.config, next));
-    this.dragSourceRoom = null;
-    this.dragSourceIdx = -1;
-  }
-
-  private toggleEdit(): void { this.editMode = !this.editMode; this.renamingDashboard = false; }
-
-  private openWizard(): void { this.wizardOpen = true; }
-  private closeWizard(): void { this.wizardOpen = false; }
+  private openWizard(): void { this.editing = null; this.wizardOpen = true; this.error = null; }
+  private editManaged(m: ManagedDashboard): void { this.editing = m; this.wizardOpen = true; this.error = null; }
+  private closeWizard(): void { this.wizardOpen = false; this.editing = null; }
 
   private async onWizardDone(e: CustomEvent<{ dashboard: Dashboard }>): Promise<void> {
-    if (!this.config) return;
-    await this.saveConfig(replaceDashboard(this.config, e.detail.dashboard));
-    this.wizardOpen = false;
+    if (!this.hass) return;
+    this.error = null;
+    try {
+      const dashboard = e.detail.dashboard;
+      const editing = this.editing;
+      let urlPath = editing?.urlPath ?? await this.uniqueUrlPath(dashboard.name);
+      const config = generateLovelaceConfig(dashboard);
+
+      if (!editing) {
+        await createDashboard(this.hass, {
+          url_path: urlPath,
+          title: dashboard.name,
+          icon: 'mdi:home-heart',
+          show_in_sidebar: true,
+        });
+      }
+
+      await saveConfig(this.hass, urlPath, config);
+
+      const now = Date.now();
+      const managed: ManagedDashboard = {
+        urlPath,
+        title: dashboard.name,
+        icon: 'mdi:home-heart',
+        dashboard,
+        createdAt: editing?.createdAt ?? now,
+        updatedAt: now,
+      };
+      await this.store.upsert(managed);
+      await this.loadManaged();
+      this.wizardOpen = false;
+      this.editing = null;
+
+      // Open the freshly created/updated dashboard in HA
+      const navUrl = `/${urlPath}`;
+      window.history.pushState(null, '', navUrl);
+      window.dispatchEvent(new Event('location-changed'));
+    } catch (err) {
+      this.error = err instanceof Error ? err.message : String(err);
+    } finally {
+      // done
+    }
   }
 
-  private async addDashboardClick(): Promise<void> {
-    if (!this.config) return;
-    const name = prompt('Name for new dashboard:', 'New Dashboard');
-    if (!name) return;
-    await this.saveConfig(addDashboard(this.config, name));
+  private async uniqueUrlPath(title: string): Promise<string> {
+    if (!this.hass) return slugify(title);
+    const base = slugify(title);
+    const existing = await listDashboards(this.hass);
+    const taken = new Set(existing.map(d => d.url_path));
+    if (!taken.has(base)) return base;
+    let i = 2;
+    while (taken.has(`${base}-${i}`)) i += 1;
+    return `${base}-${i}`;
   }
 
-  private async switchDashboard(id: string): Promise<void> {
-    if (!this.config) return;
-    await this.saveConfig(setActive(this.config, id));
+  private async deleteManaged(m: ManagedDashboard, ev: Event): Promise<void> {
+    ev.stopPropagation();
+    if (!this.hass) return;
+    if (!confirm(`Delete dashboard "${m.title}"? This removes it from the sidebar and deletes its config.`)) return;
+    try {
+      const list = await listDashboards(this.hass);
+      const entry = list.find(d => d.url_path === m.urlPath);
+      if (entry) await apiDeleteDashboard(this.hass, entry.id);
+      await this.store.remove(m.urlPath);
+      await this.loadManaged();
+    } catch (err) {
+      this.error = err instanceof Error ? err.message : String(err);
+    } finally {
+      // done
+    }
   }
 
-  private async deleteCurrentDashboard(): Promise<void> {
-    if (!this.config || !this.active) return;
-    if (this.config.dashboards.length === 1) return;
-    if (!confirm(`Delete dashboard "${this.active.name}"?`)) return;
-    await this.saveConfig(deleteDashboard(this.config, this.active.id));
+  private openInSidebar(m: ManagedDashboard, ev: Event): void {
+    ev.stopPropagation();
+    window.history.pushState(null, '', `/${m.urlPath}`);
+    window.dispatchEvent(new Event('location-changed'));
   }
 
-  private async renameCurrentDashboard(name: string): Promise<void> {
-    if (!this.config || !this.active) return;
-    await this.saveConfig(renameDashboard(this.config, this.active.id, name));
+  /** Best-effort: scan HA's existing dashboards for ones that look Smart-managed
+   * but aren't in our store (e.g. after a backup/restore). Stitches them back in. */
+  private async reconcileFromHa(): Promise<void> {
+    if (!this.hass) return;
+    try {
+      const list = await listDashboards(this.hass);
+      for (const d of list) {
+        if (this.store.byUrlPath(d.url_path)) continue;
+        const cfg = await getConfig(this.hass, d.url_path);
+        if (cfg && isSabManagedConfig(cfg)) {
+          const marker = (cfg as Record<string, unknown>)[SAB_MARKER_KEY] as { dashboardId?: string };
+          await this.store.upsert({
+            urlPath: d.url_path,
+            title: d.title,
+            icon: d.icon ?? 'mdi:home-heart',
+            dashboard: { id: marker.dashboardId ?? d.url_path, name: d.title, rooms: [] },
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          });
+        }
+      }
+      await this.loadManaged();
+    } finally {
+      // done
+    }
   }
 
   override render(): TemplateResult {
-    if (!this.config) {
-      return html`<div class="loading">Loading...</div>`;
-    }
     if (!this.adapter) {
-      return html`<div class="loading">Connecting to Home Assistant...</div>`;
+      return html`<div class="state">Connecting to Home Assistant…</div>`;
     }
-    const dash = this.active!;
-    const isEmpty = dash.rooms.length === 0;
-
     return html`
       <header>
-        <div class="dashboards">
-          ${this.config.dashboards.map(d => html`
-            <button class="tab ${d.id === dash.id ? 'active' : ''}" @click=${() => this.switchDashboard(d.id)}>${d.name}</button>
-          `)}
-          <button class="tab add" @click=${this.addDashboardClick} title="New dashboard">+</button>
+        <div class="brand">
+          <span class="dot"></span>
+          <h1>Smart Assistant Builder</h1>
         </div>
         <div class="actions">
-          <span class="count">${this.devices.length} real devices</span>
-          <button class="icon-btn" @click=${this.openWizard} title="Add to dashboard">+</button>
-          <button class="icon-btn ${this.editMode ? 'on' : ''}" @click=${this.toggleEdit} title="Edit mode">✎</button>
+          <button class="ghost" @click=${() => void this.reconcileFromHa()} title="Sync with HA dashboards">↻</button>
+          <button class="primary" @click=${this.openWizard}>+ New dashboard</button>
         </div>
       </header>
 
-      ${this.editMode ? html`
-        <div class="edit-bar">
-          ${this.renamingDashboard ? html`
-            <input
-              class="rename-input"
-              .value=${dash.name}
-              @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter') { this.renameCurrentDashboard((e.target as HTMLInputElement).value); this.renamingDashboard = false; } }}
-              @blur=${(e: FocusEvent) => { this.renameCurrentDashboard((e.target as HTMLInputElement).value); this.renamingDashboard = false; }}
-            />
-          ` : html`
-            <button class="ghost" @click=${() => { this.renamingDashboard = true; }}>Rename "${dash.name}"</button>
-          `}
-          <button class="ghost danger" @click=${this.deleteCurrentDashboard} ?disabled=${this.config.dashboards.length === 1}>Delete dashboard</button>
-        </div>
-      ` : ''}
-
       <main>
-        ${isEmpty ? this.renderEmptyState() : this.renderDashboard(dash)}
+        ${this.error ? html`<div class="err">${this.error}</div>` : ''}
+        ${this.managed.length === 0 ? this.renderEmpty() : this.renderList()}
       </main>
 
       ${this.wizardOpen ? html`
         <sab-wizard
           .adapter=${this.adapter}
-          .dashboard=${dash}
+          .initialDashboard=${this.editing?.dashboard}
+          .mode=${this.editing ? 'edit' : 'create'}
           @wizard-done=${this.onWizardDone}
           @wizard-cancel=${this.closeWizard}
         ></sab-wizard>
       ` : ''}
-
-      <sab-detail-sheet
-        .device=${this.detailDevice}
-        .adapter=${this.adapter}
-        .history=${this.historySource}
-        ?open=${!!this.detailDevice}
-        @detail-close=${() => { this.detailDevice = null; }}
-      ></sab-detail-sheet>
     `;
   }
 
-  private renderEmptyState(): TemplateResult {
+  private renderEmpty(): TemplateResult {
     return html`
       <div class="empty">
         <div class="empty-icon">🏠</div>
-        <h2>No tiles yet.</h2>
-        <p>Build your first room with the wizard. We'll only show your real devices.</p>
-        <button class="primary" @click=${this.openWizard}>Create your dashboard</button>
+        <h2>Build your first smart dashboard</h2>
+        <p>The wizard creates a real Home Assistant dashboard from your physical devices, ready to use in the sidebar.</p>
+        <button class="primary big" @click=${this.openWizard}>Start the wizard</button>
       </div>
     `;
   }
 
-  private renderDashboard(dash: Dashboard): TemplateResult {
+  private renderList(): TemplateResult {
     return html`
-      ${dash.rooms.map(room => html`
-        <section class="room">
-          <h2>${room.name}</h2>
-          <div class="grid">
-            ${room.tiles.map((tile, idx) => {
-              const dev = this.deviceFor(tile.entityId);
-              if (!dev) {
-                return html`
-                  <div class="tile-missing" title=${tile.entityId}>
-                    <div class="missing-icon">⚠</div>
-                    <div class="missing-name">${tile.entityId}</div>
-                    <div class="missing-state">Unavailable</div>
-                  </div>
-                `;
-              }
-              return html`
-                <div
-                  class="tile-wrap"
-                  draggable=${this.editMode ? 'true' : 'false'}
-                  @dragstart=${(e: DragEvent) => this.onTileDragStart(room.id, idx, e)}
-                  @dragover=${this.onTileDragOver}
-                  @drop=${(e: DragEvent) => this.onTileDrop(room.id, idx, e)}
-                >
-                  <sab-tile
-                    .tile=${tile}
-                    .device=${dev}
-                    ?editMode=${this.editMode}
-                    @tile-tap=${(e: CustomEvent<{ tile: Tile }>) => this.onTilePrimary(e.detail.tile)}
-                    @tile-long-press=${(e: CustomEvent<{ tile: Tile }>) => this.onTileLongPress(e.detail.tile)}
-                    @tile-slider=${(e: CustomEvent<{ tile: Tile; value: number }>) => this.onTileSlider(e.detail.tile, e.detail.value)}
-                    @tile-delete=${(e: CustomEvent<{ tile: Tile }>) => this.onTileDelete(e.detail.tile)}
-                  ></sab-tile>
-                </div>
-              `;
-            })}
-            ${this.editMode ? html`
-              <button class="add-tile" @click=${this.openWizard}>+</button>
-            ` : ''}
+      <div class="list">
+        ${this.managed.map(m => html`
+          <div class="card" @click=${() => this.editManaged(m)}>
+            <div class="card-icon">🏠</div>
+            <div class="card-body">
+              <div class="card-title">${m.title}</div>
+              <div class="card-meta">
+                ${m.dashboard.rooms.length} room${m.dashboard.rooms.length === 1 ? '' : 's'} ·
+                ${m.dashboard.rooms.reduce((n, r) => n + r.tiles.length, 0)} tile${m.dashboard.rooms.reduce((n, r) => n + r.tiles.length, 0) === 1 ? '' : 's'} ·
+                /${m.urlPath}
+              </div>
+            </div>
+            <div class="card-actions">
+              <button class="ghost" @click=${(e: Event) => this.openInSidebar(m, e)} title="Open dashboard">Open</button>
+              <button class="ghost" @click=${(e: Event) => { e.stopPropagation(); this.editManaged(m); }} title="Edit">Edit</button>
+              <button class="ghost danger" @click=${(e: Event) => void this.deleteManaged(m, e)} title="Delete">Delete</button>
+            </div>
           </div>
-        </section>
-      `)}
+        `)}
+      </div>
     `;
   }
 
   static override styles = css`
     :host {
+      --sab-surface: var(--ha-card-background, var(--card-background-color, #fff));
+      --sab-bg: var(--primary-background-color, #f5f5f5);
+      --sab-text: var(--primary-text-color, #1a1a1a);
+      --sab-muted: var(--secondary-text-color, #6b7280);
+      --sab-divider: var(--divider-color, rgba(0,0,0,0.1));
+      --sab-accent: var(--primary-color, #6366f1);
+      --sab-on-accent: var(--text-primary-color, #fff);
+      --sab-hover: var(--secondary-background-color, rgba(0,0,0,0.04));
+      --sab-danger: var(--error-color, #ef4444);
       display: block;
       min-height: 100vh;
-      color: var(--primary-text-color, #f8fafc);
-      background:
-        radial-gradient(circle at 20% 0%, rgba(99,102,241,0.15), transparent 40%),
-        radial-gradient(circle at 80% 100%, rgba(99,102,241,0.08), transparent 40%),
-        var(--primary-background-color, #0a0a0a);
-      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      color: var(--sab-text);
+      background: var(--sab-bg);
+      font-family: var(--ha-font-family-body, 'Inter', system-ui, sans-serif);
       -webkit-font-smoothing: antialiased;
     }
 
@@ -377,151 +286,96 @@ export class SmartAssistantPanel extends LitElement {
       padding: clamp(1rem, 2.5vw, 1.5rem) clamp(1.25rem, 4vw, 3rem);
       gap: 1rem;
       flex-wrap: wrap;
-      position: sticky;
-      top: 0;
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-      background: rgba(10,10,10,0.6);
-      z-index: 5;
-      border-bottom: 1px solid rgba(255,255,255,0.05);
+      background: var(--sab-surface);
+      border-bottom: 1px solid var(--sab-divider);
     }
-    .dashboards { display: flex; gap: 0.4rem; flex-wrap: wrap; }
-    .tab {
-      padding: 0.5rem 0.95rem;
-      border-radius: 999px;
-      border: 1px solid rgba(255,255,255,0.1);
-      background: transparent;
-      color: var(--secondary-text-color, #94a3b8);
-      cursor: pointer;
-      font-size: 0.85rem;
-      font-weight: 500;
+    .brand { display: flex; align-items: center; gap: 0.85rem; }
+    .brand .dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: var(--sab-accent);
+      box-shadow: 0 0 16px color-mix(in srgb, var(--sab-accent) 60%, transparent);
     }
-    .tab:hover { background: rgba(255,255,255,0.05); }
-    .tab.active { background: #6366f1; color: white; border-color: #6366f1; }
-    .tab.add { width: 36px; padding: 0.5rem 0; text-align: center; font-size: 1.1rem; line-height: 1; color: var(--secondary-text-color, #94a3b8); }
+    h1 { font-size: clamp(1.05rem, 1.4vw, 1.25rem); font-weight: 700; letter-spacing: -0.02em; margin: 0; color: var(--sab-text); }
 
-    .actions { display: flex; align-items: center; gap: 0.6rem; }
-    .count { font-size: 0.8rem; color: var(--secondary-text-color, #94a3b8); }
-    .icon-btn {
-      width: 36px; height: 36px;
-      border-radius: 50%;
-      border: 1px solid rgba(255,255,255,0.1);
-      background: transparent;
-      color: var(--primary-text-color, #f8fafc);
-      cursor: pointer;
-      font-size: 1rem;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-    }
-    .icon-btn:hover { background: rgba(255,255,255,0.06); }
-    .icon-btn.on { background: #6366f1; color: white; border-color: #6366f1; }
-
-    .edit-bar {
-      display: flex;
-      gap: 0.5rem;
-      padding: 0.75rem clamp(1.25rem, 4vw, 3rem);
-      background: rgba(99,102,241,0.06);
-      border-bottom: 1px solid rgba(99,102,241,0.15);
-      align-items: center;
-    }
-    .ghost {
-      padding: 0.5rem 0.95rem;
-      border-radius: 8px;
-      border: 1px solid rgba(255,255,255,0.12);
-      background: transparent;
-      color: inherit;
-      cursor: pointer;
-      font-size: 0.85rem;
-    }
-    .ghost:hover { background: rgba(255,255,255,0.05); }
-    .ghost.danger { color: #ef4444; border-color: rgba(239,68,68,0.3); }
-    .ghost[disabled] { opacity: 0.5; cursor: not-allowed; }
-    .rename-input {
-      padding: 0.5rem 0.95rem;
-      border-radius: 8px;
-      border: 1px solid rgba(99,102,241,0.5);
-      background: rgba(0,0,0,0.3);
-      color: inherit;
-      font-size: 0.95rem;
-      outline: none;
-    }
+    .actions { display: flex; align-items: center; gap: 0.5rem; }
 
     main {
       padding: clamp(1.5rem, 3vw, 2.5rem) clamp(1.25rem, 4vw, 3rem) clamp(2rem, 5vw, 4rem);
-      max-width: 1400px;
+      max-width: 1100px;
       margin: 0 auto;
     }
 
-    .room { margin-bottom: 2.5rem; }
-    .room h2 {
-      font-size: 1.1rem;
-      font-weight: 600;
-      letter-spacing: -0.01em;
-      margin: 0 0 1rem 0.25rem;
+    .err {
+      padding: 1rem 1.25rem;
+      border-radius: 10px;
+      background: color-mix(in srgb, var(--sab-danger) 10%, transparent);
+      border: 1px solid color-mix(in srgb, var(--sab-danger) 40%, transparent);
+      color: var(--sab-danger);
+      margin-bottom: 1.5rem;
+      font-size: 0.9rem;
     }
 
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-      gap: 0.85rem;
-    }
-
-    .tile-wrap { position: relative; }
-    .tile-wrap[draggable="true"] { cursor: grab; }
-
-    .tile-missing {
-      padding: 1rem 1.15rem;
-      min-height: 116px;
-      border-radius: 18px;
-      background: rgba(239,68,68,0.05);
-      border: 1px dashed rgba(239,68,68,0.3);
-      color: #fca5a5;
-      display: flex;
-      flex-direction: column;
-      gap: 0.25rem;
-    }
-    .missing-icon { font-size: 1.5rem; }
-    .missing-name { font-size: 0.85rem; font-family: ui-monospace, monospace; }
-    .missing-state { font-size: 0.75rem; opacity: 0.7; }
-
-    .add-tile {
-      min-height: 116px;
-      border-radius: 18px;
-      border: 2px dashed rgba(255,255,255,0.15);
-      background: transparent;
-      color: var(--secondary-text-color, #94a3b8);
-      cursor: pointer;
-      font-size: 1.5rem;
-    }
-    .add-tile:hover { border-color: rgba(99,102,241,0.6); color: #6366f1; }
-
-    .empty {
-      padding: 5rem 2rem;
-      text-align: center;
-      max-width: 500px;
-      margin: 0 auto;
-    }
-    .empty-icon { font-size: 4rem; margin-bottom: 1.25rem; }
-    .empty h2 { font-size: 1.5rem; font-weight: 700; margin: 0 0 0.5rem; letter-spacing: -0.02em; }
-    .empty p { color: var(--secondary-text-color, #94a3b8); margin: 0 0 1.75rem; line-height: 1.5; }
-    .empty button.primary {
-      padding: 0.85rem 1.75rem;
-      border-radius: 999px;
-      border: 0;
-      background: #6366f1;
-      color: white;
-      font-weight: 600;
-      cursor: pointer;
-      font-size: 0.95rem;
-    }
-    .empty button.primary:hover { background: #4f46e5; }
-
-    .loading {
+    .state {
       padding: 4rem 2rem;
       text-align: center;
-      color: var(--secondary-text-color, #94a3b8);
+      color: var(--sab-muted);
     }
+
+    .empty {
+      padding: 5rem 2rem 3rem;
+      text-align: center;
+      max-width: 520px;
+      margin: 0 auto;
+    }
+    .empty-icon { font-size: 4rem; margin-bottom: 1rem; }
+    .empty h2 { font-size: 1.5rem; font-weight: 700; margin: 0 0 0.5rem; letter-spacing: -0.02em; color: var(--sab-text); }
+    .empty p { color: var(--sab-muted); margin: 0 0 1.75rem; line-height: 1.5; }
+
+    .list { display: flex; flex-direction: column; gap: 0.75rem; }
+    .card {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      padding: 1rem 1.25rem;
+      border-radius: 14px;
+      background: var(--sab-surface);
+      border: 1px solid var(--sab-divider);
+      cursor: pointer;
+      transition: background 0.15s ease, border-color 0.15s ease;
+    }
+    .card:hover { border-color: var(--sab-accent); }
+    .card-icon { font-size: 1.75rem; }
+    .card-body { flex: 1; min-width: 0; }
+    .card-title { font-size: 1rem; font-weight: 600; color: var(--sab-text); margin-bottom: 0.2rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .card-meta { font-size: 0.8rem; color: var(--sab-muted); }
+    .card-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+
+    button.primary {
+      padding: 0.65rem 1.1rem;
+      border-radius: 10px;
+      border: 0;
+      background: var(--sab-accent);
+      color: var(--sab-on-accent);
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 0.9rem;
+      font-family: inherit;
+    }
+    button.primary:hover { filter: brightness(0.95); }
+    button.primary.big { padding: 0.85rem 1.75rem; font-size: 1rem; border-radius: 999px; }
+
+    button.ghost {
+      padding: 0.55rem 0.95rem;
+      border-radius: 8px;
+      border: 1px solid var(--sab-divider);
+      background: transparent;
+      color: var(--sab-text);
+      cursor: pointer;
+      font-size: 0.85rem;
+      font-family: inherit;
+    }
+    button.ghost:hover { background: var(--sab-hover); }
+    button.ghost.danger { color: var(--sab-danger); border-color: color-mix(in srgb, var(--sab-danger) 30%, transparent); }
   `;
 }
 

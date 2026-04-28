@@ -4,7 +4,6 @@ import type { HassAdapter } from '../ha/adapter.js';
 import type { Dashboard, RealDevice, Room, Tile } from '../types.js';
 import { groupByArea, listRealDevices } from '../ha/filter.js';
 import { familyIcon, smartDefaultsFor } from '../tiles/smart-defaults.js';
-import { uid } from '../store/dashboards.js';
 
 type Step = 'rooms' | 'devices' | 'tiles';
 
@@ -15,11 +14,18 @@ interface DraftRoom {
   selected: boolean;
 }
 
+let _uidCounter = 0;
+function uid(): string {
+  return `${Date.now().toString(36)}${(_uidCounter++).toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+}
+
 @customElement('sab-wizard')
 export class SabWizard extends LitElement {
   @property({ attribute: false }) adapter!: HassAdapter;
-  @property({ attribute: false }) dashboard!: Dashboard;
+  @property({ attribute: false }) initialDashboard?: Dashboard;
+  @property({ type: String }) mode: 'create' | 'edit' = 'create';
 
+  @state() private dashboardName = 'Smart Home';
   @state() private step: Step = 'rooms';
   @state() private rooms: DraftRoom[] = [];
   @state() private currentRoomIdx = 0;
@@ -28,20 +34,40 @@ export class SabWizard extends LitElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
-    this.initRooms();
+    this.initFromState();
   }
 
-  private initRooms(): void {
+  private initFromState(): void {
     const areas = this.adapter.getAreaRegistry();
-    const existing = new Map(this.dashboard.rooms.map(r => [r.areaId ?? `__${r.id}`, r]));
-    const drafts: DraftRoom[] = areas.map(a => ({
-      id: existing.get(a.area_id)?.id ?? uid(),
-      name: existing.get(a.area_id)?.name ?? a.name,
-      areaId: a.area_id,
-      selected: existing.has(a.area_id),
-    }));
-    drafts.push({ id: uid(), name: 'Unassigned', selected: false });
-    this.rooms = drafts;
+    const initial = this.initialDashboard;
+    if (initial) {
+      this.dashboardName = initial.name;
+      const drafts: DraftRoom[] = areas.map(a => {
+        const existing = initial.rooms.find(r => r.areaId === a.area_id);
+        return {
+          id: existing?.id ?? uid(),
+          name: existing?.name ?? a.name,
+          areaId: a.area_id,
+          selected: !!existing,
+        };
+      });
+      const customRooms = initial.rooms.filter(r => !r.areaId);
+      for (const r of customRooms) drafts.push({ id: r.id, name: r.name, selected: true });
+      drafts.push({ id: uid(), name: 'Unassigned', selected: !!initial.rooms.find(r => r.id === '__unassigned') });
+      this.rooms = drafts;
+      const sel = new Map<string, Set<string>>();
+      const cust = new Map<string, Set<string>>();
+      for (const r of initial.rooms) {
+        sel.set(r.id, new Set(r.tiles.map(t => t.entityId)));
+        for (const t of r.tiles) cust.set(t.entityId, new Set(t.attributes));
+      }
+      this.selectedDevices = sel;
+      this.customizedAttrs = cust;
+    } else {
+      const drafts: DraftRoom[] = areas.map(a => ({ id: uid(), name: a.name, areaId: a.area_id, selected: true }));
+      drafts.push({ id: uid(), name: 'Unassigned', selected: false });
+      this.rooms = drafts;
+    }
   }
 
   private toggleRoom(idx: number): void {
@@ -49,13 +75,11 @@ export class SabWizard extends LitElement {
     next[idx] = { ...next[idx]!, selected: !next[idx]!.selected };
     this.rooms = next;
   }
-
   private renameRoom(idx: number, name: string): void {
     const next = this.rooms.slice();
     next[idx] = { ...next[idx]!, name };
     this.rooms = next;
   }
-
   private addCustomRoom(): void {
     this.rooms = [...this.rooms.filter(r => r.name !== 'Unassigned'), { id: uid(), name: 'New Room', selected: true }, { id: uid(), name: 'Unassigned', selected: false }];
   }
@@ -75,20 +99,14 @@ export class SabWizard extends LitElement {
     set.set(roomId, cur);
     this.selectedDevices = set;
   }
-
   private nextRoomOrTiles(): void {
-    if (this.currentRoomIdx < this.selectedRooms.length - 1) {
-      this.currentRoomIdx += 1;
-    } else {
-      this.step = 'tiles';
-    }
+    if (this.currentRoomIdx < this.selectedRooms.length - 1) this.currentRoomIdx += 1;
+    else this.step = 'tiles';
   }
-
   private prevRoom(): void {
     if (this.currentRoomIdx > 0) this.currentRoomIdx -= 1;
     else this.step = 'rooms';
   }
-
   private toggleAttr(entityId: string, attr: string): void {
     const map = new Map(this.customizedAttrs);
     const cur = new Set(map.get(entityId) ?? []);
@@ -123,10 +141,12 @@ export class SabWizard extends LitElement {
         tiles,
       });
     }
-
-    const merged = mergeRooms(this.dashboard.rooms, newRooms);
-    const updated: Dashboard = { ...this.dashboard, rooms: merged };
-    this.dispatchEvent(new CustomEvent('wizard-done', { bubbles: true, composed: true, detail: { dashboard: updated } }));
+    const dashboard: Dashboard = {
+      id: this.initialDashboard?.id ?? uid(),
+      name: this.dashboardName.trim() || 'Smart Home',
+      rooms: newRooms.filter(r => r.tiles.length > 0),
+    };
+    this.dispatchEvent(new CustomEvent('wizard-done', { bubbles: true, composed: true, detail: { dashboard } }));
   }
 
   private cancel(): void {
@@ -135,15 +155,15 @@ export class SabWizard extends LitElement {
 
   override render(): TemplateResult {
     return html`
-      <div class="overlay">
-        <div class="wizard">
+      <div class="overlay" @click=${this.cancel}>
+        <div class="wizard" @click=${(e: Event) => e.stopPropagation()}>
           <header>
             <div class="step-dots">
               <span class="dot ${this.step === 'rooms' ? 'active' : ''}"></span>
               <span class="dot ${this.step === 'devices' ? 'active' : ''}"></span>
               <span class="dot ${this.step === 'tiles' ? 'active' : ''}"></span>
             </div>
-            <button class="x" @click=${this.cancel}>×</button>
+            <button class="x" @click=${this.cancel} aria-label="Close">×</button>
           </header>
           ${this.renderStep()}
         </div>
@@ -159,14 +179,21 @@ export class SabWizard extends LitElement {
 
   private renderRooms(): TemplateResult {
     return html`
-      <h1>Pick rooms</h1>
-      <p class="sub">We start from your Home Assistant Areas. Add or rename as you like.</p>
+      <h1>${this.mode === 'edit' ? 'Edit dashboard' : 'New dashboard'}</h1>
+      <p class="sub">Name your dashboard, then pick rooms. Areas come from Home Assistant.</p>
+      <label class="name-row">
+        <span class="label">Dashboard name</span>
+        <input
+          class="name-input"
+          .value=${this.dashboardName}
+          @input=${(e: Event) => { this.dashboardName = (e.target as HTMLInputElement).value; }}
+          placeholder="Smart Home"
+        />
+      </label>
+      <div class="section-title">Rooms</div>
       <div class="rooms-grid">
         ${this.rooms.map((r, i) => html`
-          <button
-            class="room-pick ${r.selected ? 'selected' : ''}"
-            @click=${() => this.toggleRoom(i)}
-          >
+          <button class="room-pick ${r.selected ? 'selected' : ''}" @click=${() => this.toggleRoom(i)}>
             <input
               class="room-name"
               .value=${r.name}
@@ -180,7 +207,7 @@ export class SabWizard extends LitElement {
       <button class="add" @click=${this.addCustomRoom}>+ Add custom room</button>
       <footer>
         <button class="ghost" @click=${this.cancel}>Cancel</button>
-        <button class="primary" ?disabled=${this.selectedRooms.length === 0} @click=${this.goToDevices}>Next: Pick devices</button>
+        <button class="primary" ?disabled=${this.selectedRooms.length === 0 || !this.dashboardName.trim()} @click=${this.goToDevices}>Next: Pick devices</button>
       </footer>
     `;
   }
@@ -192,17 +219,13 @@ export class SabWizard extends LitElement {
     const byArea = groupByArea(allDevices);
     const candidates = room.areaId ? (byArea.get(room.areaId) ?? []) : (byArea.get(null) ?? []);
     const selected = this.selectedDevices.get(room.id) ?? new Set();
-
     return html`
       <h1>${room.name}</h1>
-      <p class="sub">Pick the devices to show in this room. Room ${this.currentRoomIdx + 1} of ${this.selectedRooms.length}.</p>
-      ${candidates.length === 0 ? html`<div class="empty-cands">No real devices in this area yet. Continue and assign devices later from the unassigned bucket.</div>` : ''}
+      <p class="sub">Pick devices for this room. Room ${this.currentRoomIdx + 1} of ${this.selectedRooms.length}.</p>
+      ${candidates.length === 0 ? html`<div class="empty-cands">No real devices in this area. You can continue and assign devices later.</div>` : ''}
       <div class="devs">
         ${candidates.map(d => html`
-          <button
-            class="dev ${selected.has(d.entityId) ? 'selected' : ''}"
-            @click=${() => this.toggleDevice(room.id, d.entityId)}
-          >
+          <button class="dev ${selected.has(d.entityId) ? 'selected' : ''}" @click=${() => this.toggleDevice(room.id, d.entityId)}>
             <span class="dev-icon">${familyIcon(d.family)}</span>
             <div class="dev-meta">
               <div class="dev-name">${d.friendlyName}</div>
@@ -243,7 +266,7 @@ export class SabWizard extends LitElement {
     }
     return html`
       <h1>Customize tiles</h1>
-      <p class="sub">We picked smart defaults. Tap to override what shows on each tile.</p>
+      <p class="sub">Smart defaults are pre-selected. Tap to add or remove attributes.</p>
       <div class="tiles-list">
         ${picked.map(({ roomName, device }) => {
           const def = smartDefaultsFor(device.family);
@@ -261,10 +284,7 @@ export class SabWizard extends LitElement {
               </div>
               <div class="attrs">
                 ${allAttrs.map(a => html`
-                  <button
-                    class="attr ${active.has(a) ? 'on' : ''}"
-                    @click=${() => this.toggleAttr(device.entityId, a)}
-                  >${a}</button>
+                  <button class="attr ${active.has(a) ? 'on' : ''}" @click=${() => this.toggleAttr(device.entityId, a)}>${a}</button>
                 `)}
               </div>
             </div>
@@ -273,17 +293,29 @@ export class SabWizard extends LitElement {
       </div>
       <footer>
         <button class="ghost" @click=${() => { this.step = 'devices'; this.currentRoomIdx = 0; }}>Back</button>
-        <button class="primary" @click=${this.finish}>Save dashboard</button>
+        <button class="primary" @click=${this.finish}>${this.mode === 'edit' ? 'Save changes' : 'Create dashboard'}</button>
       </footer>
     `;
   }
 
   static override styles = css`
+    :host {
+      --sab-surface: var(--ha-card-background, var(--card-background-color, #fff));
+      --sab-text: var(--primary-text-color, #1a1a1a);
+      --sab-muted: var(--secondary-text-color, #6b7280);
+      --sab-divider: var(--divider-color, rgba(0,0,0,0.1));
+      --sab-accent: var(--primary-color, #6366f1);
+      --sab-on-accent: var(--text-primary-color, #fff);
+      --sab-hover: var(--secondary-background-color, rgba(0,0,0,0.04));
+      font-family: var(--ha-font-family-body, 'Inter', system-ui, sans-serif);
+      color: var(--sab-text);
+    }
+
     .overlay {
       position: fixed;
       inset: 0;
       z-index: 90;
-      background: rgba(0,0,0,0.6);
+      background: rgba(0,0,0,0.5);
       backdrop-filter: blur(8px);
       -webkit-backdrop-filter: blur(8px);
       display: flex;
@@ -296,12 +328,14 @@ export class SabWizard extends LitElement {
       max-width: 720px;
       max-height: 90vh;
       overflow-y: auto;
-      background: var(--card-background-color, #14141a);
-      color: var(--primary-text-color, #f8fafc);
+      background: var(--sab-surface);
+      color: var(--sab-text);
       border-radius: 24px;
       padding: 1.5rem 1.75rem 1.25rem;
-      border: 1px solid rgba(255,255,255,0.08);
-      box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+      border: 1px solid var(--sab-divider);
+      box-shadow: 0 20px 60px rgba(0,0,0,0.25);
+      display: flex;
+      flex-direction: column;
     }
 
     header {
@@ -312,20 +346,36 @@ export class SabWizard extends LitElement {
     }
     .step-dots { display: flex; gap: 0.4rem; }
     .step-dots .dot {
-      width: 7px; height: 7px; border-radius: 50%;
-      background: rgba(255,255,255,0.2);
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--sab-divider);
       transition: background 0.15s ease, width 0.15s ease;
     }
-    .step-dots .dot.active { background: #6366f1; width: 22px; border-radius: 999px; }
+    .step-dots .dot.active { background: var(--sab-accent); width: 24px; border-radius: 999px; }
     .x {
       width: 32px; height: 32px; border-radius: 50%;
-      border: 0; background: rgba(255,255,255,0.08); color: inherit;
+      border: 0; background: var(--sab-hover); color: var(--sab-text);
       font-size: 1.2rem; cursor: pointer;
     }
-    .x:hover { background: rgba(255,255,255,0.14); }
+    .x:hover { background: var(--sab-divider); }
 
-    h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em; margin: 0 0 0.4rem; }
-    .sub { font-size: 0.95rem; color: var(--secondary-text-color, #94a3b8); margin: 0 0 1.25rem; }
+    h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em; margin: 0 0 0.4rem; color: var(--sab-text); }
+    .sub { font-size: 0.95rem; color: var(--sab-muted); margin: 0 0 1.25rem; }
+
+    .name-row { display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 1.25rem; }
+    .label { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--sab-muted); }
+    .name-input {
+      padding: 0.65rem 0.85rem;
+      border-radius: 10px;
+      border: 1px solid var(--sab-divider);
+      background: var(--sab-hover);
+      color: var(--sab-text);
+      font-size: 0.95rem;
+      outline: none;
+      font-family: inherit;
+    }
+    .name-input:focus { border-color: var(--sab-accent); }
+
+    .section-title { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--sab-muted); margin-bottom: 0.5rem; }
 
     .rooms-grid {
       display: grid;
@@ -337,73 +387,76 @@ export class SabWizard extends LitElement {
       display: flex; align-items: center; justify-content: space-between;
       padding: 0.85rem 1rem;
       border-radius: 14px;
-      border: 1px solid rgba(255,255,255,0.1);
-      background: rgba(255,255,255,0.03);
-      color: inherit;
+      border: 1px solid var(--sab-divider);
+      background: var(--sab-hover);
+      color: var(--sab-text);
       cursor: pointer;
-      transition: background 0.15s ease, border-color 0.15s ease;
       gap: 0.5rem;
+      font-family: inherit;
     }
-    .room-pick.selected { background: rgba(99,102,241,0.2); border-color: rgba(99,102,241,0.6); }
-    .room-pick:hover { background: rgba(255,255,255,0.06); }
+    .room-pick:hover { background: var(--sab-divider); }
+    .room-pick.selected { background: color-mix(in srgb, var(--sab-accent) 15%, transparent); border-color: var(--sab-accent); }
     .room-name {
       flex: 1;
       background: transparent;
       border: 0;
-      color: inherit;
+      color: var(--sab-text);
       font-size: 0.95rem;
       font-weight: 600;
       outline: none;
       width: 100%;
+      font-family: inherit;
     }
-    .room-name:focus { background: rgba(0,0,0,0.2); border-radius: 6px; padding: 2px 6px; }
     .check {
-      width: 24px; height: 24px;
+      width: 26px; height: 26px;
       border-radius: 50%;
-      background: rgba(255,255,255,0.08);
+      background: var(--sab-divider);
+      color: var(--sab-text);
       display: inline-flex;
       align-items: center; justify-content: center;
       font-size: 0.85rem;
       flex-shrink: 0;
     }
-    .room-pick.selected .check, .dev.selected .check { background: #6366f1; color: white; }
+    .room-pick.selected .check, .dev.selected .check { background: var(--sab-accent); color: var(--sab-on-accent); }
 
     .add {
       width: 100%;
       padding: 0.75rem;
-      border: 1px dashed rgba(255,255,255,0.2);
+      border: 1px dashed var(--sab-divider);
       background: transparent;
-      color: var(--secondary-text-color, #94a3b8);
+      color: var(--sab-muted);
       border-radius: 14px;
       cursor: pointer;
       font-size: 0.9rem;
       margin-bottom: 1rem;
+      font-family: inherit;
     }
-    .add:hover { border-color: rgba(99,102,241,0.6); color: #6366f1; }
+    .add:hover { border-color: var(--sab-accent); color: var(--sab-accent); }
 
     .devs { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 1rem; }
     .dev {
       display: flex; align-items: center; gap: 0.85rem;
       padding: 0.85rem 1rem;
       border-radius: 14px;
-      border: 1px solid rgba(255,255,255,0.1);
-      background: rgba(255,255,255,0.03);
-      color: inherit;
+      border: 1px solid var(--sab-divider);
+      background: var(--sab-hover);
+      color: var(--sab-text);
       cursor: pointer;
-      text-align: left;
+      text-align: start;
+      font-family: inherit;
     }
-    .dev.selected { background: rgba(99,102,241,0.2); border-color: rgba(99,102,241,0.6); }
-    .dev:hover { background: rgba(255,255,255,0.06); }
+    .dev:hover { background: var(--sab-divider); }
+    .dev.selected { background: color-mix(in srgb, var(--sab-accent) 15%, transparent); border-color: var(--sab-accent); }
     .dev-icon { font-size: 1.4rem; }
     .dev-meta { flex: 1; min-width: 0; }
-    .dev-name { font-weight: 600; font-size: 0.95rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .dev-id { font-size: 0.75rem; color: var(--secondary-text-color, #94a3b8); font-family: ui-monospace, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .dev-name { font-weight: 600; font-size: 0.95rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--sab-text); }
+    .dev-id { font-size: 0.75rem; color: var(--sab-muted); font-family: ui-monospace, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
     .empty-cands {
       padding: 2rem;
       text-align: center;
-      color: var(--secondary-text-color, #94a3b8);
-      border: 1px dashed rgba(255,255,255,0.15);
+      color: var(--sab-muted);
+      border: 1px dashed var(--sab-divider);
       border-radius: 14px;
       margin-bottom: 1rem;
     }
@@ -412,22 +465,22 @@ export class SabWizard extends LitElement {
     .tile-cust {
       padding: 1rem;
       border-radius: 14px;
-      background: rgba(255,255,255,0.03);
-      border: 1px solid rgba(255,255,255,0.08);
+      background: var(--sab-hover);
+      border: 1px solid var(--sab-divider);
     }
     .tile-cust-h { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem; }
     .attrs { display: flex; flex-wrap: wrap; gap: 0.4rem; }
     .attr {
       padding: 0.4rem 0.8rem;
       border-radius: 999px;
-      border: 1px solid rgba(255,255,255,0.12);
+      border: 1px solid var(--sab-divider);
       background: transparent;
-      color: var(--secondary-text-color, #94a3b8);
+      color: var(--sab-muted);
       font-size: 0.75rem;
       cursor: pointer;
       font-family: ui-monospace, monospace;
     }
-    .attr.on { background: #6366f1; color: white; border-color: #6366f1; }
+    .attr.on { background: var(--sab-accent); color: var(--sab-on-accent); border-color: var(--sab-accent); }
 
     footer {
       position: sticky;
@@ -437,46 +490,38 @@ export class SabWizard extends LitElement {
       gap: 0.75rem;
       padding-top: 1rem;
       margin-top: auto;
-      background: linear-gradient(to top, var(--card-background-color, #14141a) 70%, transparent);
+      background: linear-gradient(to top, var(--sab-surface) 70%, transparent);
     }
     button.primary {
-      padding: 0.85rem 1.5rem;
-      border-radius: 12px;
+      padding: 0.75rem 1.5rem;
+      border-radius: 10px;
       border: 0;
-      background: #6366f1;
-      color: white;
+      background: var(--sab-accent);
+      color: var(--sab-on-accent);
       font-weight: 600;
       cursor: pointer;
       font-size: 0.95rem;
+      font-family: inherit;
     }
-    button.primary:hover { background: #4f46e5; }
+    button.primary:hover { filter: brightness(0.95); }
     button.primary[disabled] { opacity: 0.5; cursor: not-allowed; }
     button.ghost {
-      padding: 0.85rem 1.5rem;
-      border-radius: 12px;
-      border: 1px solid rgba(255,255,255,0.12);
+      padding: 0.75rem 1.5rem;
+      border-radius: 10px;
+      border: 1px solid var(--sab-divider);
       background: transparent;
-      color: inherit;
+      color: var(--sab-text);
       cursor: pointer;
       font-size: 0.95rem;
+      font-family: inherit;
     }
-    button.ghost:hover { background: rgba(255,255,255,0.06); }
-  `;
-}
+    button.ghost:hover { background: var(--sab-hover); }
 
-function mergeRooms(existing: Room[], incoming: Room[]): Room[] {
-  const map = new Map(existing.map(r => [r.id, r]));
-  for (const r of incoming) {
-    const prev = map.get(r.id);
-    if (!prev) {
-      map.set(r.id, r);
-    } else {
-      const existingTileIds = new Set(prev.tiles.map(t => t.entityId));
-      const merged = [...prev.tiles, ...r.tiles.filter(t => !existingTileIds.has(t.entityId))];
-      map.set(r.id, { ...prev, name: r.name, tiles: merged });
-    }
-  }
-  return Array.from(map.values());
+    :host([dir="rtl"]) .dev-id,
+    :host([dir="rtl"]) .name-input,
+    :host([dir="rtl"]) .room-name { direction: ltr; text-align: end; unicode-bidi: plaintext; }
+    :host([dir="rtl"]) .dev { text-align: start; }
+  `;
 }
 
 declare global {

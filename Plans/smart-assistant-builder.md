@@ -135,6 +135,29 @@ type Tile = {
 
 Build size: 79.88 KB / 19.77 KB gzipped. Initial commit `6dd25c7`.
 
+## v0.2.0 redesign (2026-04-28)
+
+**Architecture change:** Smart panel becomes a wizard/hub only; the wizard now generates a **real HA Lovelace dashboard** (storage-mode) via WebSocket APIs. The generated dashboard uses HA's built-in `tile` cards inside `sections` views. This removes our custom runtime tile/detail/sparkline path entirely.
+
+**Wins:**
+- Persistence is automatic - dashboards live in HA's normal config alongside every other dashboard.
+- Theme correctness comes for free (native cards inherit HA theme).
+- Sidebar navigation works like any HA dashboard.
+- Drag-reorder, edit mode, history, color pickers all come from HA's native Lovelace edit experience.
+- Bundle shrinks dramatically.
+
+**New steps:**
+- [ ] R1. Refactor `panel.ts` into a wizard hub (list of dashboards, create new, edit, delete).
+- [ ] R2. Add `lovelace/api.ts` for `lovelace/dashboards/{create,update,delete}` and `lovelace/config{,/save}`.
+- [ ] R3. Add `lovelace/generator.ts` to convert our Dashboard model -> sections + tile-cards Lovelace config.
+- [ ] R4. Add `lovelace/parser.ts` for round-trip editing of an existing Smart-managed dashboard.
+- [ ] R5. Replace old multi-dashboard storage with `managed.ts` tracking the url_paths Smart owns.
+- [ ] R6. Remove unused custom runtime: `dashboard-tile`, `detail-sheet`, `sparkline`, `bottom-sheet`, `history`.
+- [ ] R7. Fix CSS to follow HA theme tokens (`--primary-text-color`, `--secondary-text-color`, `--divider-color`, `--card-background-color`, `--primary-color`).
+- [ ] R8. RTL: read `hass.language`, flip `dir` on host for `he` / `ar`.
+- [ ] R9. Add a "Dashboard name" input to wizard step 1.
+- [ ] R10. Bump v0.2.0, push, tag, release.
+
 ## Open questions
 
 - **GitHub repo name**: `ha-smart-assistant-builder` proposed — confirm.

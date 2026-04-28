@@ -1,4 +1,3 @@
-import type { StoredConfig } from '../types.js';
 import { STORAGE_KEY, type ConfigStorage } from './storage.js';
 
 interface HaConnection {
@@ -10,27 +9,28 @@ export interface HaLikeForStorage {
 }
 
 /**
- * Persists config via HA's frontend storage WebSocket commands. This is the same
- * mechanism Lovelace uses for per-user state and survives restarts. If unavailable
- * on a given HA instance, falls back to localStorage transparently.
+ * Persists Smart's "managed dashboards" list via HA's frontend storage WebSocket
+ * commands. Each dashboard's actual content lives in HA's normal Lovelace storage,
+ * not here - this only tracks the url_paths Smart owns plus the wizard state used
+ * to (re)generate them.
  */
 export class HaConfigStorage implements ConfigStorage {
   constructor(private readonly hass: HaLikeForStorage) {}
 
-  async load(): Promise<StoredConfig | null> {
+  async load(): Promise<unknown | null> {
     try {
-      const result = await this.hass.connection.sendMessagePromise<{ value?: StoredConfig | null }>({
+      const result = await this.hass.connection.sendMessagePromise<{ value?: unknown }>({
         type: 'frontend/get_user_data',
         key: STORAGE_KEY,
       });
       return result?.value ?? null;
     } catch {
       const raw = localStorage.getItem(STORAGE_KEY);
-      return raw ? (JSON.parse(raw) as StoredConfig) : null;
+      return raw ? JSON.parse(raw) : null;
     }
   }
 
-  async save(config: StoredConfig): Promise<void> {
+  async save(config: unknown): Promise<void> {
     try {
       await this.hass.connection.sendMessagePromise({
         type: 'frontend/set_user_data',
@@ -38,7 +38,6 @@ export class HaConfigStorage implements ConfigStorage {
         value: config,
       });
     } catch {
-      // best-effort fallback so the user never loses their config
       localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
     }
   }
