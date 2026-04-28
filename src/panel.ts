@@ -8,16 +8,21 @@ import { LocalConfigStorage } from './store/storage.local.js';
 import { HaConfigStorage } from './store/storage.ha.js';
 import {
   createDashboard,
+  createResource,
   deleteDashboard as apiDeleteDashboard,
   getConfig,
   listDashboards,
+  listResources,
   saveConfig,
   slugify,
+  updateResource,
 } from './lovelace/api.js';
 import { generateLovelaceConfig, isSabManagedConfig } from './lovelace/generator.js';
 import './wizard/wizard.js';
 
 const RTL_LANGS = new Set(['he', 'ar', 'fa', 'ur']);
+const PANEL_VERSION = '0.3.0';
+const RESOURCE_URL = `/hacsfiles/ha-smart-assistant-builder/smart-assistant-builder.js?v=${PANEL_VERSION}`;
 
 @customElement('smart-assistant-panel')
 export class SmartAssistantPanel extends LitElement {
@@ -58,6 +63,7 @@ export class SmartAssistantPanel extends LitElement {
           void this.realAdapter.loadRegistries().then(async () => {
             this.adapter = this.realAdapter;
             await this.loadManaged();
+            void this.ensureResourceRegistered();
           });
         } else {
           this.realAdapter.setHass(this.hass);
@@ -174,6 +180,30 @@ export class SmartAssistantPanel extends LitElement {
     ev.stopPropagation();
     window.history.pushState(null, '', `/${m.urlPath}`);
     window.dispatchEvent(new Event('location-changed'));
+  }
+
+  /** Make sure our JS is registered as a Lovelace resource so the
+   * custom <sab-tile-card> element loads on every dashboard, not just inside
+   * Smart panel. Idempotent: skips if already present, updates the URL if the
+   * version changed. */
+  private async ensureResourceRegistered(): Promise<void> {
+    if (!this.hass) return;
+    try {
+      const list = await listResources(this.hass);
+      const baseUrl = RESOURCE_URL.split('?')[0]!;
+      const existing = list.find(r => (r.url ?? '').split('?')[0] === baseUrl);
+      if (!existing) {
+        console.info('[SAB] registering Lovelace resource', RESOURCE_URL);
+        await createResource(this.hass, { res_type: 'module', url: RESOURCE_URL });
+      } else if (existing.url !== RESOURCE_URL) {
+        console.info('[SAB] updating Lovelace resource version to', RESOURCE_URL);
+        await updateResource(this.hass, existing.id, { res_type: 'module', url: RESOURCE_URL });
+      }
+    } catch (err) {
+      // Resource registration requires HA to be in storage mode. If it's in
+      // YAML mode, this command errors. We just log and move on.
+      console.info('[SAB] could not auto-register resource (likely YAML mode):', err);
+    }
   }
 
   /** Best-effort: scan HA's existing dashboards for ones that look Smart-managed

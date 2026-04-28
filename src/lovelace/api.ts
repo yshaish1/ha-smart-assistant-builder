@@ -73,6 +73,39 @@ export async function saveConfig(hass: HassLike, urlPath: string, config: Lovela
   });
 }
 
+export interface LovelaceResource {
+  id: string;
+  type: string;
+  url: string;
+}
+
+export async function listResources(hass: HassLike): Promise<LovelaceResource[]> {
+  return hass.connection.sendMessagePromise({ type: 'lovelace/resources' });
+}
+
+export async function createResource(
+  hass: HassLike,
+  params: { res_type: 'module' | 'css' | 'js'; url: string }
+): Promise<LovelaceResource> {
+  return hass.connection.sendMessagePromise({
+    type: 'lovelace/resources/create',
+    res_type: params.res_type,
+    url: params.url,
+  });
+}
+
+export async function updateResource(
+  hass: HassLike,
+  resourceId: string,
+  params: { res_type?: 'module' | 'css' | 'js'; url?: string }
+): Promise<LovelaceResource> {
+  return hass.connection.sendMessagePromise({
+    type: 'lovelace/resources/update',
+    resource_id: resourceId,
+    ...params,
+  });
+}
+
 export function slugify(s: string): string {
   return s
     .toLowerCase()
