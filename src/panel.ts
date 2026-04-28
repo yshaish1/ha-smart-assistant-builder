@@ -22,8 +22,18 @@ import { generateLovelaceConfig, isSabManagedConfig } from './lovelace/generator
 import './wizard/wizard.js';
 
 const RTL_LANGS = new Set(['he', 'ar', 'fa', 'ur']);
-const PANEL_VERSION = '0.4.3';
-const RESOURCE_URL = `/hacsfiles/ha-smart-assistant-builder/smart-assistant-builder.js?v=${PANEL_VERSION}`;
+
+declare const __SAB_BUILD_ID__: string;
+declare const __SAB_VERSION__: string;
+const BUILD_ID = __SAB_BUILD_ID__;
+console.info('[SAB] panel version', __SAB_VERSION__);
+// Embed a marker so we can identify this build when fetching the file.
+// String must remain searchable post-minification - it's used as a literal.
+const BUILD_MARKER = `SAB_BUILD_ID:${BUILD_ID}:END`;
+console.info('[SAB] panel build', BUILD_MARKER);
+
+const MODULE_PATH = '/hacsfiles/ha-smart-assistant-builder/smart-assistant-builder.js';
+const RESOURCE_URL = MODULE_PATH;
 
 @customElement('smart-assistant-panel')
 export class SmartAssistantPanel extends LitElement {
@@ -40,6 +50,7 @@ export class SmartAssistantPanel extends LitElement {
   @state() private editing: ManagedDashboard | null = null;
   @state() private error: string | null = null;
   @state() private saving = false;
+  @state() private updateAvailable = false;
 
   private store: ManagedConfigStore = new ManagedConfigStore(new LocalConfigStorage());
   private realAdapter?: RealHassAdapter;
@@ -47,6 +58,23 @@ export class SmartAssistantPanel extends LitElement {
   override connectedCallback(): void {
     super.connectedCallback();
     void this.bootstrap();
+    void this.checkForUpdate();
+  }
+
+  private async checkForUpdate(): Promise<void> {
+    try {
+      const resp = await fetch(MODULE_PATH, { cache: 'no-cache', credentials: 'same-origin' });
+      if (!resp.ok) return;
+      const text = await resp.text();
+      const match = text.match(/SAB_BUILD_ID:([\w.-]+):END/);
+      const liveBuild = match?.[1];
+      if (liveBuild && liveBuild !== BUILD_ID) {
+        console.info('[SAB] new build detected', { running: BUILD_ID, live: liveBuild });
+        this.updateAvailable = true;
+      }
+    } catch (err) {
+      console.info('[SAB] update check skipped', err);
+    }
   }
 
   override disconnectedCallback(): void {
@@ -250,6 +278,12 @@ export class SmartAssistantPanel extends LitElement {
       </header>
 
       <main>
+        ${this.updateAvailable ? html`
+          <div class="update-banner">
+            <span><strong>New version installed.</strong> Reload the page to use it.</span>
+            <button class="ghost" @click=${() => location.reload()}>Reload now</button>
+          </div>
+        ` : ''}
         ${this.error ? html`<div class="err">${this.error}</div>` : ''}
         ${this.managed.length === 0 ? this.renderEmpty() : this.renderList()}
       </main>
@@ -358,6 +392,22 @@ export class SmartAssistantPanel extends LitElement {
       margin-bottom: 1.5rem;
       font-size: 0.9rem;
     }
+
+    .update-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: 0.85rem 1.15rem;
+      border-radius: 12px;
+      background: color-mix(in srgb, var(--sab-accent) 12%, transparent);
+      border: 1px solid color-mix(in srgb, var(--sab-accent) 50%, transparent);
+      color: var(--sab-text);
+      margin-bottom: 1.5rem;
+      font-size: 0.9rem;
+      flex-wrap: wrap;
+    }
+    .update-banner button { white-space: nowrap; }
 
     .state {
       padding: 4rem 2rem;
