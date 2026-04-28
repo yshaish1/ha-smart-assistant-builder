@@ -57,6 +57,18 @@ export class SabWizard extends LitElement {
 
   private markDirty(): void { if (!this.dirty) this.dirty = true; }
 
+  private canJumpTo(target: Step): boolean {
+    if (this.mode === 'edit') return true;
+    const order: Step[] = ['settings', 'rooms', 'devices', 'tiles'];
+    return order.indexOf(target) <= order.indexOf(this.step);
+  }
+
+  override updated(changed: Map<string, unknown>): void {
+    if (changed.has('step') || changed.has('currentRoomIdx')) {
+      this.shadowRoot?.querySelector<HTMLElement>('.wizard')?.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }
+
   private initFromState(): void {
     const areas = this.adapter.getAreaRegistry();
     const initial = this.initialDashboard;
@@ -232,11 +244,23 @@ export class SabWizard extends LitElement {
         <div class="wizard">
           <header>
             <div class="step-dots">
-              <span class="dot ${this.step === 'settings' ? 'active' : ''}"></span>
-              <span class="dot ${this.step === 'rooms' ? 'active' : ''}"></span>
-              <span class="dot ${this.step === 'devices' ? 'active' : ''}"></span>
-              <span class="dot ${this.step === 'tiles' ? 'active' : ''}"></span>
+              ${(['settings', 'rooms', 'devices', 'tiles'] as const).map(s => {
+                const canJump = this.canJumpTo(s);
+                return html`
+                  <button
+                    class="dot-btn ${this.step === s ? 'active' : ''}"
+                    ?disabled=${!canJump}
+                    @click=${() => { if (canJump) this.step = s; }}
+                    title=${stepTitle(s)}
+                  ><span class="dot ${this.step === s ? 'active' : ''}"></span></button>
+                `;
+              })}
             </div>
+            ${this.mode === 'edit' ? html`
+              <button class="ghost small jump-tiles" @click=${() => { if (this.canJumpTo('tiles')) this.step = 'tiles'; }} ?disabled=${!this.canJumpTo('tiles')}>
+                Edit cards →
+              </button>
+            ` : ''}
             ${this.dirty ? html`<span class="dirty-badge" title="Unsaved changes">●</span>` : ''}
             <button class="x" @click=${this.requestClose} aria-label="Close">×</button>
           </header>
@@ -396,35 +420,41 @@ export class SabWizard extends LitElement {
       const ids = this.selectedDevices.get(r.id) ?? new Set();
       for (const id of ids) otherRoomMap.set(id, r.name);
     }
-    const sorted = [...allDevices].sort((a, b) => {
-      const ai = inArea.has(a.entityId) ? 0 : 1;
-      const bi = inArea.has(b.entityId) ? 0 : 1;
-      if (ai !== bi) return ai - bi;
-      return a.friendlyName.localeCompare(b.friendlyName);
-    });
+    const inAreaDevices = allDevices.filter(d => inArea.has(d.entityId)).sort((a, b) => a.friendlyName.localeCompare(b.friendlyName));
+    const otherDevices = allDevices.filter(d => !inArea.has(d.entityId)).sort((a, b) => a.friendlyName.localeCompare(b.friendlyName));
+
+    const renderDevButton = (d: RealDevice) => {
+      const isSelected = selected.has(d.entityId);
+      const inThisArea = inArea.has(d.entityId);
+      const otherRoom = otherRoomMap.get(d.entityId);
+      return html`
+        <button class="dev ${isSelected ? 'selected' : ''}" @click=${() => this.toggleDevice(room.id, d.entityId)}>
+          <span class="dev-icon">${familyEmoji(d.family)}</span>
+          <div class="dev-meta">
+            <div class="dev-name">${d.friendlyName}</div>
+            <div class="dev-id">${d.entityId}</div>
+          </div>
+          ${inThisArea ? html`<span class="tag in-area">in this area</span>` : ''}
+          ${otherRoom ? html`<span class="tag other">in ${otherRoom}</span>` : ''}
+          <span class="check">${isSelected ? '✓' : '+'}</span>
+        </button>
+      `;
+    };
 
     return html`
       <h1>${room.name}</h1>
-      <p class="sub">Pick devices for this room. Devices in this area are listed first. Room ${this.currentRoomIdx + 1} of ${this.selectedRooms.length}.</p>
+      <p class="sub">Pick devices for this room. Devices in this area come first. Room ${this.currentRoomIdx + 1} of ${this.selectedRooms.length}.</p>
       <div class="devs">
-        ${sorted.map(d => {
-          const isSelected = selected.has(d.entityId);
-          const inThisArea = inArea.has(d.entityId);
-          const otherRoom = otherRoomMap.get(d.entityId);
-          return html`
-            <button class="dev ${isSelected ? 'selected' : ''}" @click=${() => this.toggleDevice(room.id, d.entityId)}>
-              <span class="dev-icon">${familyEmoji(d.family)}</span>
-              <div class="dev-meta">
-                <div class="dev-name">${d.friendlyName}</div>
-                <div class="dev-id">${d.entityId}</div>
-              </div>
-              ${inThisArea ? html`<span class="tag in-area">in this area</span>` : ''}
-              ${otherRoom ? html`<span class="tag other">in ${otherRoom}</span>` : ''}
-              <span class="check">${isSelected ? '✓' : '+'}</span>
-            </button>
-          `;
-        })}
-        ${sorted.length === 0 ? html`<div class="empty-cands">No real devices found.</div>` : ''}
+        ${inAreaDevices.length > 0 ? html`
+          <div class="group-label">In this area · ${inAreaDevices.length}</div>
+          ${inAreaDevices.map(renderDevButton)}
+        ` : ''}
+        ${otherDevices.length > 0 ? html`
+          ${inAreaDevices.length > 0 ? html`<div class="group-sep"></div>` : ''}
+          <div class="group-label">Other devices · ${otherDevices.length}</div>
+          ${otherDevices.map(renderDevButton)}
+        ` : ''}
+        ${allDevices.length === 0 ? html`<div class="empty-cands">No real devices found.</div>` : ''}
       </div>
       <footer>
         <button class="ghost" @click=${this.prevRoom}>Back</button>
@@ -624,13 +654,30 @@ export class SabWizard extends LitElement {
       justify-content: space-between;
       margin-bottom: 1rem;
     }
-    .step-dots { display: flex; gap: 0.4rem; }
+    .step-dots { display: flex; gap: 0.4rem; align-items: center; }
+    .dot-btn {
+      background: transparent;
+      border: 0;
+      padding: 4px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+    }
+    .dot-btn:disabled { cursor: not-allowed; opacity: 0.5; }
+    .dot-btn:hover:not(:disabled) { background: var(--sab-hover); }
     .step-dots .dot {
       width: 8px; height: 8px; border-radius: 50%;
       background: var(--sab-divider);
       transition: background 0.15s ease, width 0.15s ease;
+      pointer-events: none;
     }
     .step-dots .dot.active { background: var(--sab-accent); width: 24px; border-radius: 999px; }
+    .jump-tiles {
+      margin-inline-start: 0.5rem;
+      font-size: 0.8rem !important;
+      padding: 0.4rem 0.85rem !important;
+    }
     .x {
       width: 32px; height: 32px; border-radius: 50%;
       border: 0; background: var(--sab-hover); color: var(--sab-text);
@@ -741,6 +788,21 @@ export class SabWizard extends LitElement {
     .add:hover { border-color: var(--sab-accent); color: var(--sab-accent); }
 
     .devs { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 1rem; }
+    .group-label {
+      font-size: 0.7rem;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--sab-muted);
+      margin-top: 0.5rem;
+      padding: 0 0.25rem;
+    }
+    .group-label:first-child { margin-top: 0; }
+    .group-sep {
+      height: 1px;
+      background: var(--sab-divider);
+      margin: 0.85rem 0 0.5rem;
+    }
     .dev {
       display: flex; align-items: center; gap: 0.85rem;
       padding: 0.85rem 1rem;
@@ -914,6 +976,15 @@ interface TileOverrides {
 function defaultBindingForFamily(family: DeviceFamily): AttributeRender {
   if (family === 'sensor') return 'sparkline';
   return 'text';
+}
+
+function stepTitle(s: Step): string {
+  switch (s) {
+    case 'settings': return 'Settings';
+    case 'rooms': return 'Rooms';
+    case 'devices': return 'Devices';
+    case 'tiles': return 'Tiles';
+  }
 }
 
 declare global { interface HTMLElementTagNameMap { 'sab-wizard': SabWizard } }

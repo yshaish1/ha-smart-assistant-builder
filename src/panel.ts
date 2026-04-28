@@ -51,6 +51,8 @@ export class SmartAssistantPanel extends LitElement {
   @state() private error: string | null = null;
   @state() private saving = false;
   @state() private updateAvailable = false;
+  @state() private resourceJustRegistered = false;
+  @state() private resourceMissing = false;
 
   private store: ManagedConfigStore = new ManagedConfigStore(new LocalConfigStorage());
   private realAdapter?: RealHassAdapter;
@@ -224,14 +226,18 @@ export class SmartAssistantPanel extends LitElement {
       if (!existing) {
         console.info('[SAB] registering Lovelace resource', RESOURCE_URL);
         await createResource(this.hass, { res_type: 'module', url: RESOURCE_URL });
+        this.resourceJustRegistered = true;
       } else if (existing.url !== RESOURCE_URL) {
-        console.info('[SAB] updating Lovelace resource version to', RESOURCE_URL);
+        console.info('[SAB] updating Lovelace resource URL to', RESOURCE_URL);
         await updateResource(this.hass, existing.id, { res_type: 'module', url: RESOURCE_URL });
+      } else {
+        console.info('[SAB] Lovelace resource already registered');
       }
     } catch (err) {
-      // Resource registration requires HA to be in storage mode. If it's in
-      // YAML mode, this command errors. We just log and move on.
-      console.info('[SAB] could not auto-register resource (likely YAML mode):', err);
+      // Resource registration requires storage-mode resources. If it's in
+      // YAML mode (or admin perms missing), this command errors.
+      console.warn('[SAB] could not auto-register resource:', err);
+      this.resourceMissing = true;
     }
   }
 
@@ -270,6 +276,7 @@ export class SmartAssistantPanel extends LitElement {
         <div class="brand">
           <span class="dot"></span>
           <h1>Smart Assistant Builder</h1>
+          <span class="version" title="Build ${BUILD_ID}">v${__SAB_VERSION__}</span>
         </div>
         <div class="actions">
           <button class="ghost" @click=${() => void this.reconcileFromHa()} title="Sync with HA dashboards">↻</button>
@@ -282,6 +289,17 @@ export class SmartAssistantPanel extends LitElement {
           <div class="update-banner">
             <span><strong>New version installed.</strong> Reload the page to use it.</span>
             <button class="ghost" @click=${() => location.reload()}>Reload now</button>
+          </div>
+        ` : ''}
+        ${this.resourceJustRegistered ? html`
+          <div class="info-banner">
+            <span><strong>Lovelace resource just registered.</strong> Restart Home Assistant once so existing dashboards (especially the mobile app) load the tile card. Settings → System → Restart.</span>
+            <button class="ghost" @click=${() => { this.resourceJustRegistered = false; }}>Got it</button>
+          </div>
+        ` : ''}
+        ${this.resourceMissing ? html`
+          <div class="err">
+            <strong>Could not auto-register the Lovelace resource.</strong> Add it manually: Settings → Dashboards → Resources → Add Resource → URL <code>${MODULE_PATH}</code>, Type "JavaScript Module".
           </div>
         ` : ''}
         ${this.error ? html`<div class="err">${this.error}</div>` : ''}
@@ -374,6 +392,7 @@ export class SmartAssistantPanel extends LitElement {
       box-shadow: 0 0 16px color-mix(in srgb, var(--sab-accent) 60%, transparent);
     }
     h1 { font-size: clamp(1.05rem, 1.4vw, 1.25rem); font-weight: 700; letter-spacing: -0.02em; margin: 0; color: var(--sab-text); }
+    .version { font-size: 0.7rem; color: var(--sab-muted); font-family: ui-monospace, monospace; padding: 0.15rem 0.5rem; background: var(--sab-hover); border-radius: 999px; cursor: default; }
 
     .actions { display: flex; align-items: center; gap: 0.5rem; }
 
@@ -408,6 +427,23 @@ export class SmartAssistantPanel extends LitElement {
       flex-wrap: wrap;
     }
     .update-banner button { white-space: nowrap; }
+
+    .info-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: 0.85rem 1.15rem;
+      border-radius: 12px;
+      background: color-mix(in srgb, var(--warning-color, #f59e0b) 12%, transparent);
+      border: 1px solid color-mix(in srgb, var(--warning-color, #f59e0b) 50%, transparent);
+      color: var(--sab-text);
+      margin-bottom: 1.5rem;
+      font-size: 0.9rem;
+      flex-wrap: wrap;
+    }
+    .info-banner code { font-family: ui-monospace, monospace; padding: 0.1rem 0.4rem; background: var(--sab-hover); border-radius: 4px; }
+    .err code { font-family: ui-monospace, monospace; padding: 0.1rem 0.4rem; background: var(--sab-hover); border-radius: 4px; color: var(--sab-text); }
 
     .state {
       padding: 4rem 2rem;

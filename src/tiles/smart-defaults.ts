@@ -97,8 +97,17 @@ export function isOnState(state: string): boolean {
   return state === 'on' || state === 'open' || state === 'unlocked' || state === 'playing' || state === 'cleaning' || state === 'heat' || state === 'cool' || state === 'auto' || state === 'heat_cool' || state === 'fan_only';
 }
 
+const IMAGE_NAME_RE = /picture|image|photo|thumbnail|art|cover|avatar|snapshot/i;
+
+function looksLikeImage(attribute: string, value: unknown): boolean {
+  if (typeof value !== 'string' || value.length === 0) return false;
+  if (IMAGE_NAME_RE.test(attribute)) return true;
+  return value.startsWith('http') || value.startsWith('/api/') || value.startsWith('/local/') || /\.(png|jpg|jpeg|gif|webp|svg)(\?|$)/i.test(value);
+}
+
 /** Suggest a render style for an attribute we don't have a smart default for. */
 export function suggestRender(attribute: string, value: unknown): AttributeRender {
+  if (looksLikeImage(attribute, value)) return 'image';
   if (typeof value === 'boolean') return 'toggle';
   if (typeof value === 'number') {
     if (/battery|signal|rssi/i.test(attribute)) return 'badge';
@@ -115,6 +124,7 @@ export function availableRendersFor(attribute: string, value: unknown): Attribut
   if (attribute === 'state') {
     return ['text', 'badge', 'sparkline', 'toggle'];
   }
+  if (looksLikeImage(attribute, value)) return ['image', 'text', 'badge'];
   if (typeof value === 'boolean') return ['text', 'badge', 'toggle'];
   if (typeof value === 'number') {
     const isRangeable = value >= 0 && value <= 100 && /percent|brightness|level|position|volume|temperature|humidity|battery|signal/i.test(attribute);

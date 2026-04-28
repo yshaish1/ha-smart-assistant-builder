@@ -21,7 +21,7 @@ export type PrimaryAction =
 export type TileSize = 'small' | 'medium' | 'large';
 export type IconStyle = 'emoji' | 'mdi' | 'off';
 export type Density = 'compact' | 'comfortable' | 'spacious';
-export type AttributeRender = 'text' | 'slider' | 'badge' | 'sparkline' | 'toggle';
+export type AttributeRender = 'text' | 'slider' | 'badge' | 'sparkline' | 'toggle' | 'image';
 
 export interface AttributeBinding {
   attribute: string;

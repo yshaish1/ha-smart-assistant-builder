@@ -171,6 +171,8 @@ export class SabTileCard extends LitElement {
     const badges = bindings.filter(b => b.render === 'badge' && isPrimitiveAttr(b.attribute));
     const sparkline = bindings.find(b => b.render === 'sparkline' && isNumericAttr(b.attribute));
     const toggles = bindings.filter(b => b.render === 'toggle' && isPrimitiveAttr(b.attribute));
+    const images = bindings.filter(b => b.render === 'image' && typeof e?.attributes[b.attribute] === 'string' && (e!.attributes[b.attribute] as string).length > 0);
+    const heroImage = images.length > 0 ? (e!.attributes[images[0]!.attribute] as string) : undefined;
 
     const accent = this.config.colorOverride ?? settings.accentColor;
     const density = settings.density;
@@ -193,7 +195,7 @@ export class SabTileCard extends LitElement {
           </div>
         ` : ''}
 
-        ${this.renderIcon(family)}
+        ${this.renderIcon(family, heroImage)}
         <div class="name">${name}</div>
         <div class="state">${unavailable || !e ? (unavailable ? 'Unavailable' : '') : defaultStateLine(family, e)}</div>
 
@@ -219,6 +221,8 @@ export class SabTileCard extends LitElement {
                 @input=${(ev: Event) => void this.onSlider(b, ev)}
                 @click=${(ev: Event) => ev.stopPropagation()}
                 @pointerdown=${(ev: Event) => ev.stopPropagation()}
+                @pointerup=${(ev: Event) => ev.stopPropagation()}
+                @pointercancel=${(ev: Event) => ev.stopPropagation()}
               />
             </div>
           `;
@@ -241,11 +245,18 @@ export class SabTileCard extends LitElement {
     const value = isStateAttr ? toBool(e.state) : toBool(e.attributes[b.attribute]);
     const label = b.label ?? prettyAttr(b.attribute);
     const interactive = isStateAttr && this.isToggleable();
+    const stop = (ev: Event) => ev.stopPropagation();
     return html`
-      <div class="toggle-row" @click=${(ev: Event) => {
-        ev.stopPropagation();
-        if (interactive) void this.runPrimary();
-      }}>
+      <div
+        class="toggle-row"
+        @pointerdown=${stop}
+        @pointerup=${stop}
+        @pointercancel=${stop}
+        @click=${(ev: Event) => {
+          ev.stopPropagation();
+          if (interactive) void this.runPrimary();
+        }}
+      >
         <span class="toggle-label">${label}</span>
         <span class="toggle ${value ? 'on' : 'off'} ${interactive ? '' : 'readonly'}" role="switch" aria-checked=${value ? 'true' : 'false'}>
           <span class="knob"></span>
@@ -259,7 +270,10 @@ export class SabTileCard extends LitElement {
     return f === 'light' || f === 'switch' || f === 'fan' || f === 'lock' || f === 'cover' || f === 'media';
   }
 
-  private renderIcon(family: DeviceFamily): TemplateResult {
+  private renderIcon(family: DeviceFamily, heroImage?: string): TemplateResult {
+    if (heroImage) {
+      return html`<div class="icon img"><img src=${heroImage} alt="" loading="lazy" /></div>`;
+    }
     const style = this.settings.iconStyle;
     if (style === 'off') return html``;
     const customIcon = this.config?.icon;
@@ -364,6 +378,13 @@ export class SabTileCard extends LitElement {
     .icon.emoji { font-size: 1.5rem; }
     .icon.mdi { font-size: 0; }
     .icon.mdi ha-icon { --mdc-icon-size: 28px; color: currentColor; }
+    .icon.img { width: 36px; height: 36px; }
+    .icon.img img {
+      width: 100%; height: 100%;
+      border-radius: 50%;
+      object-fit: cover;
+      display: block;
+    }
 
     .name {
       font-size: 0.95rem;
