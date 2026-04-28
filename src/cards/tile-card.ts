@@ -32,7 +32,7 @@ function fireMoreInfo(node: HTMLElement, entityId: string): void {
 @customElement('sab-tile-card')
 export class SabTileCard extends LitElement {
   @property({ attribute: false }) hass?: HassLike;
-  @state() private config?: TileCardConfig;
+  @property({ attribute: false }) config?: TileCardConfig;
   @state() private history: HistoryPoint[] = [];
 
   private pressTimer: number | undefined;

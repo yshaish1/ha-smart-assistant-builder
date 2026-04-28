@@ -5,6 +5,9 @@ import type { AttributeBinding, AttributeRender, Dashboard, DashboardSettings, D
 import { DEFAULT_SETTINGS } from '../types.js';
 import { groupByArea, listRealDevices } from '../ha/filter.js';
 import { NOISE_ATTRS, familyEmoji, smartDefaultsFor, suggestRender } from '../tiles/smart-defaults.js';
+import '../cards/tile-card.js';
+import type { HassLike } from '../ha/adapter.real.js';
+import type { HassEntity } from '../types.js';
 
 type Step = 'settings' | 'rooms' | 'devices' | 'tiles';
 
@@ -417,19 +420,51 @@ export class SabWizard extends LitElement {
     `;
   }
 
+  private get hassLike(): HassLike {
+    const states: Record<string, HassEntity> = {};
+    for (const s of this.adapter.getStates()) states[s.entity_id] = s;
+    return {
+      states,
+      connection: {
+        sendMessagePromise: async () => ({} as never),
+        subscribeMessage: async () => () => {},
+      },
+      callService: async () => {},
+    };
+  }
+
+  private previewConfigFor(device: RealDevice, ov: TileOverrides) {
+    const def = smartDefaultsFor(device.family);
+    return {
+      type: 'custom:sab-tile-card',
+      entity: device.entityId,
+      family: device.family,
+      primaryAction: def.primaryAction,
+      bindings: ov.bindings,
+      settings: this.settings,
+      ...(ov.customName ? { name: ov.customName } : {}),
+      ...(ov.customIcon ? { icon: ov.customIcon } : {}),
+      ...(ov.colorOverride ? { colorOverride: ov.colorOverride } : {}),
+    };
+  }
+
   private renderTileEditor(roomName: string, device: RealDevice): TemplateResult {
     const def = smartDefaultsFor(device.family);
     const ov = this.getOverrides(device.entityId, def);
     const allAttrs = Object.keys(device.attributes).filter(k => !NOISE_ATTRS.has(k));
     const renderModes: AttributeRender[] = ['text', 'slider', 'badge', 'sparkline'];
+    const previewConfig = this.previewConfigFor(device, ov);
 
     return html`
       <div class="tile-cust">
         <div class="tile-cust-h">
           <span class="dev-icon">${familyEmoji(device.family)}</span>
-          <div>
+          <div class="dev-h-meta">
             <div class="dev-name">${ov.customName || device.friendlyName}</div>
             <div class="dev-id">${roomName} · ${device.entityId}</div>
+          </div>
+          <div class="preview" aria-label="Live preview">
+            <sab-tile-card .hass=${this.hassLike} .config=${previewConfig}></sab-tile-card>
           </div>
         </div>
 
@@ -699,7 +734,18 @@ export class SabWizard extends LitElement {
       background: var(--sab-hover);
       border: 1px solid var(--sab-divider);
     }
-    .tile-cust-h { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.85rem; }
+    .tile-cust-h { display: flex; align-items: flex-start; gap: 0.75rem; margin-bottom: 0.85rem; }
+    .dev-h-meta { flex: 1; min-width: 0; padding-top: 0.2rem; }
+    .preview {
+      width: clamp(160px, 30%, 240px);
+      flex-shrink: 0;
+      pointer-events: none;
+    }
+    .preview sab-tile-card { display: block; width: 100%; }
+    @media (max-width: 600px) {
+      .tile-cust-h { flex-direction: column; }
+      .preview { width: 100%; }
+    }
     .cust-row { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem; flex-wrap: wrap; }
     .cust-l { font-size: 0.75rem; color: var(--sab-muted); min-width: 110px; }
     .cust-l.small { min-width: auto; }
