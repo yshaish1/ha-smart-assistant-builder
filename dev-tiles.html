@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tile Card Dev</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --primary-text-color: #1a1a1a;
+      --secondary-text-color: #6b7280;
+      --primary-background-color: #f5f5f5;
+      --card-background-color: #ffffff;
+      --ha-card-background: #ffffff;
+      --divider-color: rgba(0,0,0,0.1);
+      --primary-color: #6366f1;
+      --secondary-background-color: rgba(0,0,0,0.04);
+      --text-primary-color: #ffffff;
+      --error-color: #ef4444;
+      --warning-color: #f59e0b;
+    }
+    body.dark {
+      --primary-text-color: #f8fafc;
+      --secondary-text-color: #94a3b8;
+      --primary-background-color: #0a0a0a;
+      --card-background-color: #14141a;
+      --ha-card-background: #14141a;
+      --divider-color: rgba(255,255,255,0.1);
+      --secondary-background-color: rgba(255,255,255,0.04);
+    }
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: var(--primary-background-color);
+      color: var(--primary-text-color);
+      font-family: 'Inter', system-ui, sans-serif;
+    }
+    .toolbar {
+      position: sticky; top: 0; z-index: 10;
+      display: flex; gap: 0.6rem; align-items: center;
+      padding: 0.75rem 1.25rem;
+      background: var(--card-background-color);
+      border-bottom: 1px solid var(--divider-color);
+    }
+    .toolbar h1 { margin: 0; font-size: 1rem; font-weight: 700; }
+    .toolbar button {
+      padding: 0.4rem 0.85rem;
+      border: 1px solid var(--divider-color);
+      background: transparent;
+      color: inherit;
+      border-radius: 8px;
+      cursor: pointer;
+      font: inherit;
+      font-size: 0.85rem;
+    }
+    .toolbar button:hover { background: var(--secondary-background-color); }
+    .layout { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; padding: 1.5rem; }
+    @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 0.85rem;
+      padding: 1rem;
+      background: var(--card-background-color);
+      border: 1px solid var(--divider-color);
+      border-radius: 14px;
+    }
+    .log {
+      background: #0a0a0a;
+      color: #4ade80;
+      font-family: ui-monospace, 'SF Mono', monospace;
+      font-size: 0.78rem;
+      padding: 1rem;
+      border-radius: 14px;
+      height: calc(100vh - 5rem);
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .log .timestamp { color: #94a3b8; }
+    .log .ev { color: #fbbf24; font-weight: 600; }
+    .log .target { color: #60a5fa; }
+    .group-h { padding: 0.5rem 1rem; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--secondary-text-color); }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <h1>Tile Card Dev</h1>
+    <button id="dark">Toggle theme</button>
+    <button id="clear">Clear log</button>
+    <span style="color: var(--secondary-text-color); font-size: 0.85rem;">click anything → log</span>
+  </div>
+  <div class="layout">
+    <div>
+      <div class="group-h">Light · toggle binding on state</div>
+      <div class="grid" id="g1"></div>
+      <div class="group-h">Switch (small)</div>
+      <div class="grid" id="g2"></div>
+      <div class="group-h">Cover with slider</div>
+      <div class="grid" id="g3"></div>
+      <div class="group-h">Lock</div>
+      <div class="grid" id="g4"></div>
+      <div class="group-h">Media player with controls + image</div>
+      <div class="grid" id="g5"></div>
+      <div class="group-h">Sensor with sparkline</div>
+      <div class="grid" id="g6"></div>
+    </div>
+    <div class="log" id="log"></div>
+  </div>
+
+  <script type="module">
+    import './src/cards/tile-card.ts';
+
+    const log = document.getElementById('log');
+    function appendLog(level, msg) {
+      const time = new Date().toISOString().slice(11, 23);
+      const div = document.createElement('div');
+      div.innerHTML = `<span class="timestamp">${time}</span> <span class="ev">${level}</span> ${msg}`;
+      log.appendChild(div);
+      log.scrollTop = log.scrollHeight;
+    }
+    document.getElementById('clear').onclick = () => { log.innerHTML = ''; };
+    document.getElementById('dark').onclick = () => { document.body.classList.toggle('dark'); };
+
+    // Mock hass
+    const states = {
+      'light.living_room': { entity_id: 'light.living_room', state: 'on', attributes: { friendly_name: 'Living Room', brightness: 180, supported_color_modes: ['hs','color_temp'] } },
+      'switch.coffee': { entity_id: 'switch.coffee', state: 'off', attributes: { friendly_name: 'Coffee Maker' } },
+      'cover.garage': { entity_id: 'cover.garage', state: 'closed', attributes: { friendly_name: 'Garage', current_position: 0 } },
+      'lock.front': { entity_id: 'lock.front', state: 'locked', attributes: { friendly_name: 'Front Door' } },
+      'media_player.tv': {
+        entity_id: 'media_player.tv',
+        state: 'playing',
+        attributes: {
+          friendly_name: 'Living Room TV',
+          volume_level: 0.4,
+          is_volume_muted: false,
+          media_title: 'Severance',
+          entity_picture: 'https://upload.wikimedia.org/wikipedia/commons/thumb/4/41/Apple_TV_Plus_Logo.svg/240px-Apple_TV_Plus_Logo.svg.png',
+          supported_features: 16384 + 1 + 16 + 32 + 8 + 4096,
+        },
+      },
+      'sensor.living_temp': { entity_id: 'sensor.living_temp', state: '21.4', attributes: { friendly_name: 'Living Room Temp', unit_of_measurement: '°C' } },
+    };
+
+    const hass = {
+      states,
+      connection: {
+        sendMessagePromise: async (msg) => {
+          appendLog('WS', JSON.stringify(msg));
+          if (msg.type === 'history/history_during_period') return {};
+          return {};
+        },
+        subscribeMessage: async () => () => {},
+      },
+      callService: async (domain, service, data) => {
+        appendLog('CALL', `<span class="target">${domain}.${service}</span> ${JSON.stringify(data)}`);
+        // Simulate state changes
+        const id = data?.entity_id;
+        if (!id || !states[id]) return;
+        const e = states[id];
+        if (service === 'toggle') e.state = e.state === 'on' ? 'off' : 'on';
+        else if (service === 'lock') e.state = 'locked';
+        else if (service === 'unlock') e.state = 'unlocked';
+        else if (service === 'open_cover') e.state = 'open';
+        else if (service === 'close_cover') e.state = 'closed';
+        else if (service === 'media_play_pause') e.state = e.state === 'playing' ? 'paused' : 'playing';
+        else if (service === 'media_next_track') e.attributes.media_title = 'Next track';
+        else if (service === 'media_previous_track') e.attributes.media_title = 'Previous track';
+        else if (service === 'volume_mute') e.attributes.is_volume_muted = data.is_volume_muted;
+        // Force re-render of all cards
+        document.querySelectorAll('sab-tile-card').forEach(c => c.requestUpdate());
+      },
+    };
+
+    function renderCards(containerId, configs) {
+      const container = document.getElementById(containerId);
+      for (const config of configs) {
+        const card = document.createElement('sab-tile-card');
+        card.hass = hass;
+        // Use both pathways: setConfig and direct property
+        try { card.setConfig(config); } catch (err) { appendLog('ERR', err.message); }
+        // Spy on global pointer events bubbling out
+        ['pointerdown', 'pointerup', 'click'].forEach(type => {
+          card.addEventListener(type, (e) => {
+            const path = e.composedPath().map(n => n.localName ?? n.nodeName).slice(0, 4).join(' < ');
+            appendLog(type.toUpperCase(), `target=<span class="target">${e.target.localName ?? e.target.nodeName}</span> path=${path}`);
+          }, { capture: true });
+        });
+        container.appendChild(card);
+      }
+    }
+
+    const SETTINGS = { maxColumns: 4, density: 'comfortable', accentColor: '#6366f1', iconStyle: 'emoji', background: { type: 'solid', color: '' } };
+
+    renderCards('g1', [{
+      type: 'custom:sab-tile-card',
+      entity: 'light.living_room',
+      family: 'light',
+      primaryAction: 'auto',
+      bindings: [
+        { attribute: 'state', render: 'toggle' },
+        { attribute: 'brightness', render: 'slider' },
+      ],
+      settings: SETTINGS,
+    }]);
+
+    renderCards('g2', [{
+      type: 'custom:sab-tile-card',
+      entity: 'switch.coffee',
+      family: 'switch',
+      primaryAction: 'auto',
+      bindings: [{ attribute: 'state', render: 'toggle' }],
+      settings: SETTINGS,
+    }]);
+
+    renderCards('g3', [{
+      type: 'custom:sab-tile-card',
+      entity: 'cover.garage',
+      family: 'cover',
+      primaryAction: 'auto',
+      bindings: [{ attribute: 'current_position', render: 'slider' }],
+      settings: SETTINGS,
+    }]);
+
+    renderCards('g4', [{
+      type: 'custom:sab-tile-card',
+      entity: 'lock.front',
+      family: 'lock',
+      primaryAction: 'auto',
+      bindings: [{ attribute: 'state', render: 'toggle' }],
+      settings: SETTINGS,
+    }]);
+
+    renderCards('g5', [{
+      type: 'custom:sab-tile-card',
+      entity: 'media_player.tv',
+      family: 'media',
+      primaryAction: 'auto',
+      bindings: [
+        { attribute: 'media_title', render: 'text' },
+        { attribute: 'entity_picture', render: 'image' },
+        { attribute: 'is_volume_muted', render: 'toggle' },
+        { attribute: 'volume_level', render: 'slider' },
+      ],
+      settings: SETTINGS,
+    }]);
+
+    renderCards('g6', [{
+      type: 'custom:sab-tile-card',
+      entity: 'sensor.living_temp',
+      family: 'sensor',
+      primaryAction: 'more_info',
+      bindings: [{ attribute: 'state', render: 'sparkline' }],
+      settings: SETTINGS,
+    }]);
+
+    appendLog('READY', 'Click any tile / control. Each event + service call is logged here.');
+  </script>
+</body>
+</html>

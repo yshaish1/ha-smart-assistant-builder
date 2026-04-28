@@ -270,12 +270,18 @@ export class SabTileCard extends LitElement {
     const PREV = 16, NEXT = 32, MUTE = 8;
     const stop = (ev: Event) => ev.stopPropagation();
     const muted = !!e.attributes['is_volume_muted'];
+    const mkClick = (label: string, fn: () => Promise<void>) => (ev: Event) => {
+      ev.stopPropagation();
+      ev.preventDefault();
+      console.info('[SAB] media', label);
+      void fn();
+    };
     return html`
-      <div class="media-controls" @pointerdown=${stop} @pointerup=${stop} @click=${stop}>
-        ${can(PREV) ? html`<button class="mc" @pointerup=${(ev: Event) => { ev.stopPropagation(); void this.mediaControl('media_previous_track'); }} title="Previous">⏮</button>` : ''}
-        <button class="mc primary-mc" @pointerup=${(ev: Event) => { ev.stopPropagation(); void this.mediaControl('media_play_pause'); }} title="Play/Pause">${e.state === 'playing' ? '⏸' : '▶'}</button>
-        ${can(NEXT) ? html`<button class="mc" @pointerup=${(ev: Event) => { ev.stopPropagation(); void this.mediaControl('media_next_track'); }} title="Next">⏭</button>` : ''}
-        ${can(MUTE) ? html`<button class="mc ${muted ? 'active' : ''}" @pointerup=${(ev: Event) => { ev.stopPropagation(); void this.mediaMute(); }} title="Mute">${muted ? '🔇' : '🔊'}</button>` : ''}
+      <div class="media-controls" @pointerdown=${stop} @pointerup=${stop}>
+        ${can(PREV) ? html`<button type="button" class="mc" @click=${mkClick('prev', () => this.mediaControl('media_previous_track'))} title="Previous">⏮</button>` : ''}
+        <button type="button" class="mc primary-mc" @click=${mkClick('play_pause', () => this.mediaControl('media_play_pause'))} title="Play/Pause">${e.state === 'playing' ? '⏸' : '▶'}</button>
+        ${can(NEXT) ? html`<button type="button" class="mc" @click=${mkClick('next', () => this.mediaControl('media_next_track'))} title="Next">⏭</button>` : ''}
+        ${can(MUTE) ? html`<button type="button" class="mc ${muted ? 'active' : ''}" @click=${mkClick('mute', () => this.mediaMute())} title="Mute">${muted ? '🔇' : '🔊'}</button>` : ''}
       </div>
     `;
   }
@@ -288,14 +294,16 @@ export class SabTileCard extends LitElement {
     const interactive = this.toggleHandlerFor(b.attribute) != null;
     const stop = (ev: Event) => ev.stopPropagation();
     return html`
-      <div
+      <button
+        type="button"
         class="toggle-row ${interactive ? 'interactive' : ''}"
+        ?disabled=${!interactive}
         @pointerdown=${stop}
-        @pointermove=${stop}
-        @pointercancel=${stop}
-        @click=${stop}
-        @pointerup=${(ev: PointerEvent) => {
+        @pointerup=${stop}
+        @click=${(ev: Event) => {
           ev.stopPropagation();
+          ev.preventDefault();
+          console.info('[SAB] toggle click', b.attribute);
           if (interactive) void this.runToggleAction(b.attribute);
         }}
       >
@@ -303,7 +311,7 @@ export class SabTileCard extends LitElement {
         <span class="toggle ${value ? 'on' : 'off'} ${interactive ? '' : 'readonly'}" role="switch" aria-checked=${value ? 'true' : 'false'}>
           <span class="knob"></span>
         </span>
-      </div>
+      </button>
     `;
   }
 
@@ -528,7 +536,15 @@ export class SabTileCard extends LitElement {
       gap: 0.5rem;
       margin-top: 0.55rem;
       cursor: default;
+      border: 0;
+      background: transparent;
+      padding: 0;
+      color: inherit;
+      font: inherit;
+      width: 100%;
+      text-align: start;
     }
+    .toggle-row[disabled] { opacity: 1; }
     .toggle-row.interactive { cursor: pointer; }
     .toggle-label { font-size: 0.8rem; opacity: 0.85; pointer-events: none; }
     .toggle {
