@@ -75,18 +75,25 @@ export class SabTileCard extends LitElement {
     return this.config?.settings ?? DEFAULT_SETTINGS;
   }
 
+  private isInteractiveTarget(e: Event): boolean {
+    const t = e.target as HTMLElement | null;
+    if (!t) return false;
+    return !!t.closest('button, input, a, .toggle-row, .toggle, .media-controls, .slider-row, .slider, .icon.img');
+  }
+
   private startPress = (e: PointerEvent): void => {
+    if (this.isInteractiveTarget(e)) return;
     this.longPressed = false;
     this.pressTimer = window.setTimeout(() => {
       this.longPressed = true;
       if (this.config) fireMoreInfo(this, this.config.entity);
     }, 380);
-    void e;
   };
   private clearPress = (): void => {
     if (this.pressTimer != null) { clearTimeout(this.pressTimer); this.pressTimer = undefined; }
   };
-  private endPress = (): void => {
+  private endPress = (e: PointerEvent): void => {
+    if (this.isInteractiveTarget(e)) { this.clearPress(); return; }
     this.clearPress();
     if (this.longPressed) { this.longPressed = false; return; }
     void this.runPrimary();
