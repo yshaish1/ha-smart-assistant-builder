@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Smart Assistant Builder - Dev</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    html, body { margin: 0; padding: 0; background: #0a0a0a; color: #f8fafc; font-family: 'Inter', system-ui, sans-serif; }
+    smart-assistant-panel { display: block; }
+    .dev-toolbar {
+      position: fixed; top: 0.6rem; left: 0.6rem; z-index: 200;
+      display: flex; gap: 0.5rem;
+      padding: 0.4rem 0.6rem;
+      background: rgba(99,102,241,0.15);
+      border: 1px solid rgba(99,102,241,0.4);
+      border-radius: 8px;
+      font-size: 0.7rem;
+      color: #c7d2fe;
+    }
+    .dev-toolbar button {
+      background: transparent; border: 0; color: inherit; cursor: pointer; font-size: 0.7rem; padding: 2px 6px; border-radius: 4px;
+    }
+    .dev-toolbar button:hover { background: rgba(255,255,255,0.1); }
+  </style>
+</head>
+<body>
+  <div class="dev-toolbar">
+    <span>DEV (mock HA + localStorage)</span>
+    <button id="reset">Reset config</button>
+  </div>
+  <smart-assistant-panel id="panel"></smart-assistant-panel>
+  <script type="module">
+    import './src/main.ts';
+    import { MockHassAdapter } from './src/ha/adapter.mock.ts';
+    const panel = document.getElementById('panel');
+    panel.adapter = new MockHassAdapter();
+    document.getElementById('reset').addEventListener('click', () => {
+      localStorage.removeItem('smart_assistant_builder_config_v1');
+      location.reload();
+    });
+  </script>
+</body>
+</html>

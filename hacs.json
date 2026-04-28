@@ -1,0 +1,7 @@
+{
+  "name": "Smart Assistant Builder",
+  "content_in_root": false,
+  "filename": "smart-assistant-builder.js",
+  "homeassistant": "2024.4.0",
+  "render_readme": true
+}
