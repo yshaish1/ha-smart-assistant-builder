@@ -28,7 +28,7 @@ A guided wizard walks you through Room -> Device -> Tile, surfacing only lights,
        sidebar_title: Smart
        sidebar_icon: mdi:home-heart
        url_path: smart-builder
-       module_url: /hacsfiles/smart-assistant-builder/smart-assistant-builder.js
+       module_url: /hacsfiles/ha-smart-assistant-builder/smart-assistant-builder.js
    ```
 
 6. Restart Home Assistant. A new **Smart** entry appears in the left sidebar.

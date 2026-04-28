@@ -122,16 +122,18 @@ type Tile = {
 
 ## Status
 
-- [x] **1. Scaffold panel project** - Lit 3 + TS + Vite, single ESM bundle, hacs.json, dev.html shell. Build outputs `dist/smart-assistant-builder.js` (31.5 KB / 9.98 KB gzipped).
-- [x] **2. Mock HA data layer** - `src/ha/adapter.mock.ts` with 5 areas, 14 real devices (lights, locks, climate, sensors, fan, vacuum, media, plug, garage), plus 6 noise entities (automation, script, scene, helper, template, disabled).
-- [x] **3. Real-device filter** - `src/ha/filter.ts` implements all exclusion rules. Verified: noise entities are dropped, sensors without manufacturer are dropped, disabled and unavailable are dropped.
-- [ ] 4. Wizard
-- [ ] 5. Tile components
-- [ ] 6. Detail sheet + sparkline
-- [ ] 7. Multi-dashboard + storage
-- [ ] 8. Real HA wiring
-- [ ] 9. Drag-to-reorder
-- [ ] 10. HACS publish
+- [x] **1. Scaffold panel project** - Lit 3 + TS + Vite, single ESM bundle, hacs.json, dev.html shell.
+- [x] **2. Mock HA data layer** - `src/ha/adapter.mock.ts` with 5 areas, 14 real devices, 6 noise entities.
+- [x] **3. Real-device filter** - `src/ha/filter.ts` implements all exclusion rules.
+- [x] **4. Wizard** - `src/wizard/wizard.ts`, three-step state machine (Room -> Device -> Tile), smart defaults + customize.
+- [x] **5. Tile components** - `src/components/dashboard-tile.ts`, tap / long-press / inline slider / draggable / delete in edit mode.
+- [x] **6. Detail sheet + sparkline** - `src/components/detail-sheet.ts` + `bottom-sheet.ts` + `sparkline.ts`. 24h SVG sparkline with mock history source.
+- [x] **7. Multi-dashboard + storage** - `src/store/{storage,storage.local,storage.ha,dashboards}.ts`. Top tabs, add/rename/delete, HA frontend storage with localStorage fallback.
+- [ ] **8. Real HA wiring** - `src/ha/adapter.real.ts` written and wired in `panel.ts` (consumes the `hass` prop HA injects). Verification on user's live HA pending user trigger.
+- [x] **9. Drag-to-reorder** - HTML5 drag/drop on tile-wrap in edit mode, persists order via `moveTile` + `saveConfig`.
+- [x] **10. HACS publish** - `hacs.json`, `info.md`, `.github/workflows/release.yml`, README with HACS install steps. Repo init + first commit done. Push to GitHub awaiting user approval.
+
+Build size: 79.88 KB / 19.77 KB gzipped. Initial commit `6dd25c7`.
 
 ## Open questions
 

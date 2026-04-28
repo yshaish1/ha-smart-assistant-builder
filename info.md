@@ -12,7 +12,7 @@ panel_custom:
     sidebar_title: Smart
     sidebar_icon: mdi:home-heart
     url_path: smart-builder
-    module_url: /hacsfiles/smart-assistant-builder/smart-assistant-builder.js
+    module_url: /hacsfiles/ha-smart-assistant-builder/smart-assistant-builder.js
 ```
 
 Restart Home Assistant. Open the new "Smart" entry from the sidebar.
