@@ -14,7 +14,7 @@ import {
   saveConfig,
   slugify,
 } from './lovelace/api.js';
-import { generateLovelaceConfig, isSabManagedConfig, SAB_MARKER_KEY } from './lovelace/generator.js';
+import { generateLovelaceConfig, isSabManagedConfig } from './lovelace/generator.js';
 import './wizard/wizard.js';
 
 const RTL_LANGS = new Set(['he', 'ar', 'fa', 'ur']);
@@ -33,6 +33,7 @@ export class SmartAssistantPanel extends LitElement {
   @state() private wizardOpen = false;
   @state() private editing: ManagedDashboard | null = null;
   @state() private error: string | null = null;
+  @state() private saving = false;
 
   private store: ManagedConfigStore = new ManagedConfigStore(new LocalConfigStorage());
   private realAdapter?: RealHassAdapter;
@@ -86,24 +87,33 @@ export class SmartAssistantPanel extends LitElement {
   private closeWizard(): void { this.wizardOpen = false; this.editing = null; }
 
   private async onWizardDone(e: CustomEvent<{ dashboard: Dashboard }>): Promise<void> {
-    if (!this.hass) return;
+    if (!this.hass) {
+      this.error = 'No Home Assistant connection.';
+      return;
+    }
     this.error = null;
+    this.saving = true;
+    const dashboard = e.detail.dashboard;
+    const editing = this.editing;
     try {
-      const dashboard = e.detail.dashboard;
-      const editing = this.editing;
-      let urlPath = editing?.urlPath ?? await this.uniqueUrlPath(dashboard.name);
+      console.info('[SAB] saving dashboard', dashboard);
+      const urlPath = editing?.urlPath ?? await this.uniqueUrlPath(dashboard.name);
+      console.info('[SAB] resolved url_path', urlPath);
       const config = generateLovelaceConfig(dashboard);
+      console.info('[SAB] generated lovelace config', config);
 
       if (!editing) {
-        await createDashboard(this.hass, {
+        const created = await createDashboard(this.hass, {
           url_path: urlPath,
           title: dashboard.name,
           icon: 'mdi:home-heart',
           show_in_sidebar: true,
         });
+        console.info('[SAB] dashboard created', created);
       }
 
       await saveConfig(this.hass, urlPath, config);
+      console.info('[SAB] lovelace config saved for', urlPath);
 
       const now = Date.now();
       const managed: ManagedDashboard = {
@@ -118,15 +128,17 @@ export class SmartAssistantPanel extends LitElement {
       await this.loadManaged();
       this.wizardOpen = false;
       this.editing = null;
+      this.saving = false;
 
       // Open the freshly created/updated dashboard in HA
       const navUrl = `/${urlPath}`;
       window.history.pushState(null, '', navUrl);
       window.dispatchEvent(new Event('location-changed'));
     } catch (err) {
-      this.error = err instanceof Error ? err.message : String(err);
-    } finally {
-      // done
+      console.error('[SAB] save failed', err);
+      const msg = err instanceof Error ? err.message : (err && typeof err === 'object' && 'message' in err ? String((err as { message: unknown }).message) : String(err));
+      this.error = msg;
+      this.saving = false;
     }
   }
 
@@ -174,12 +186,11 @@ export class SmartAssistantPanel extends LitElement {
         if (this.store.byUrlPath(d.url_path)) continue;
         const cfg = await getConfig(this.hass, d.url_path);
         if (cfg && isSabManagedConfig(cfg)) {
-          const marker = (cfg as Record<string, unknown>)[SAB_MARKER_KEY] as { dashboardId?: string };
           await this.store.upsert({
             urlPath: d.url_path,
             title: d.title,
             icon: d.icon ?? 'mdi:home-heart',
-            dashboard: { id: marker.dashboardId ?? d.url_path, name: d.title, rooms: [] },
+            dashboard: { id: d.url_path, name: d.title, rooms: [] },
             createdAt: Date.now(),
             updatedAt: Date.now(),
           });
@@ -217,6 +228,8 @@ export class SmartAssistantPanel extends LitElement {
           .adapter=${this.adapter}
           .initialDashboard=${this.editing?.dashboard}
           .mode=${this.editing ? 'edit' : 'create'}
+          .saveError=${this.error}
+          ?saving=${this.saving}
           @wizard-done=${this.onWizardDone}
           @wizard-cancel=${this.closeWizard}
         ></sab-wizard>

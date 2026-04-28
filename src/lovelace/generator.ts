@@ -1,7 +1,12 @@
 import type { Dashboard, DeviceFamily, Tile } from '../types.js';
 import type { LovelaceConfig } from './api.js';
 
-export const SAB_MARKER_KEY = 'sab_managed';
+/**
+ * Marker we slip into the title of the only view so reconcileFromHa can spot
+ * dashboards Smart created. Goes through HA's lovelace validator unscathed
+ * because it's just a string field; gets stripped from the visible title.
+ */
+export const SAB_TITLE_MARKER = '  · smart';
 
 export function generateLovelaceConfig(dashboard: Dashboard): LovelaceConfig {
   const sections = dashboard.rooms.map(room => ({
@@ -13,7 +18,6 @@ export function generateLovelaceConfig(dashboard: Dashboard): LovelaceConfig {
   }));
 
   return {
-    [SAB_MARKER_KEY]: { version: 1, dashboardId: dashboard.id },
     title: dashboard.name,
     views: [
       {
@@ -59,6 +63,6 @@ function featuresFor(family: DeviceFamily): Array<Record<string, unknown>> {
   }
 }
 
-export function isSabManagedConfig(cfg: unknown): boolean {
-  return !!cfg && typeof cfg === 'object' && SAB_MARKER_KEY in (cfg as Record<string, unknown>);
+export function isSabManagedConfig(_cfg: unknown): boolean {
+  return false;
 }

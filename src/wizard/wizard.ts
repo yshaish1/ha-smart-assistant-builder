@@ -24,6 +24,8 @@ export class SabWizard extends LitElement {
   @property({ attribute: false }) adapter!: HassAdapter;
   @property({ attribute: false }) initialDashboard?: Dashboard;
   @property({ type: String }) mode: 'create' | 'edit' = 'create';
+  @property({ type: String }) saveError: string | null = null;
+  @property({ type: Boolean }) saving = false;
 
   @state() private dashboardName = 'Smart Home';
   @state() private step: Step = 'rooms';
@@ -165,6 +167,7 @@ export class SabWizard extends LitElement {
             </div>
             <button class="x" @click=${this.cancel} aria-label="Close">×</button>
           </header>
+          ${this.saveError ? html`<div class="save-error"><strong>Could not save:</strong> ${this.saveError}</div>` : ''}
           ${this.renderStep()}
         </div>
       </div>
@@ -292,8 +295,10 @@ export class SabWizard extends LitElement {
         })}
       </div>
       <footer>
-        <button class="ghost" @click=${() => { this.step = 'devices'; this.currentRoomIdx = 0; }}>Back</button>
-        <button class="primary" @click=${this.finish}>${this.mode === 'edit' ? 'Save changes' : 'Create dashboard'}</button>
+        <button class="ghost" @click=${() => { this.step = 'devices'; this.currentRoomIdx = 0; }} ?disabled=${this.saving}>Back</button>
+        <button class="primary" @click=${this.finish} ?disabled=${this.saving}>
+          ${this.saving ? 'Saving…' : (this.mode === 'edit' ? 'Save changes' : 'Create dashboard')}
+        </button>
       </footer>
     `;
   }
@@ -505,6 +510,18 @@ export class SabWizard extends LitElement {
     }
     button.primary:hover { filter: brightness(0.95); }
     button.primary[disabled] { opacity: 0.5; cursor: not-allowed; }
+
+    .save-error {
+      padding: 0.85rem 1rem;
+      border-radius: 10px;
+      background: color-mix(in srgb, var(--error-color, #ef4444) 12%, transparent);
+      border: 1px solid color-mix(in srgb, var(--error-color, #ef4444) 50%, transparent);
+      color: var(--error-color, #ef4444);
+      margin-bottom: 1rem;
+      font-size: 0.85rem;
+      line-height: 1.4;
+      word-break: break-word;
+    }
     button.ghost {
       padding: 0.75rem 1.5rem;
       border-radius: 10px;
