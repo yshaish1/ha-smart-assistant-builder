@@ -4,7 +4,7 @@ import type { HassAdapter } from '../ha/adapter.js';
 import type { AttributeBinding, AttributeRender, Dashboard, DashboardSettings, DeviceFamily, IconStyle, RealDevice, Room, Tile, TileSize } from '../types.js';
 import { DEFAULT_SETTINGS } from '../types.js';
 import { groupByArea, listRealDevices } from '../ha/filter.js';
-import { NOISE_ATTRS, familyEmoji, smartDefaultsFor, suggestRender } from '../tiles/smart-defaults.js';
+import { NOISE_ATTRS, availableRendersFor, familyEmoji, smartDefaultsFor, suggestRender } from '../tiles/smart-defaults.js';
 import '../cards/tile-card.js';
 import type { HassLike } from '../ha/adapter.real.js';
 import type { HassEntity } from '../types.js';
@@ -33,11 +33,29 @@ export class SabWizard extends LitElement {
   @state() private currentRoomIdx = 0;
   @state() private selectedDevices = new Map<string, Set<string>>();
   @state() private tileOverrides = new Map<string, TileOverrides>();
+  @state() private dirty = false;
+  @state() private confirmDiscard = false;
+
+  private boundBeforeUnload?: (e: BeforeUnloadEvent) => void;
 
   override connectedCallback(): void {
     super.connectedCallback();
     this.initFromState();
+    this.boundBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (this.dirty && !this.saving) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', this.boundBeforeUnload);
   }
+
+  override disconnectedCallback(): void {
+    super.disconnectedCallback();
+    if (this.boundBeforeUnload) window.removeEventListener('beforeunload', this.boundBeforeUnload);
+  }
+
+  private markDirty(): void { if (!this.dirty) this.dirty = true; }
 
   private initFromState(): void {
     const areas = this.adapter.getAreaRegistry();
@@ -76,17 +94,21 @@ export class SabWizard extends LitElement {
 
   private setSetting<K extends keyof DashboardSettings>(key: K, value: DashboardSettings[K]): void {
     this.settings = { ...this.settings, [key]: value };
+    this.markDirty();
   }
 
   private toggleRoom(idx: number): void {
     const next = this.rooms.slice(); next[idx] = { ...next[idx]!, selected: !next[idx]!.selected };
     this.rooms = next;
+    this.markDirty();
   }
   private renameRoom(idx: number, name: string): void {
     const next = this.rooms.slice(); next[idx] = { ...next[idx]!, name }; this.rooms = next;
+    this.markDirty();
   }
   private addCustomRoom(): void {
     this.rooms = [...this.rooms.filter(r => r.name !== 'Unassigned'), { id: uid(), name: 'New Room', selected: true }, { id: uid(), name: 'Unassigned', selected: false }];
+    this.markDirty();
   }
 
   private get selectedRooms(): DraftRoom[] { return this.rooms.filter(r => r.selected); }
@@ -106,6 +128,7 @@ export class SabWizard extends LitElement {
     }
     set.set(roomId, cur);
     this.selectedDevices = set;
+    this.markDirty();
   }
 
   private nextRoomOrTiles(): void {
@@ -132,18 +155,19 @@ export class SabWizard extends LitElement {
     const cur = map.get(entityId) ?? this.getOverrides(entityId, smartDefaultsFor('switch'));
     map.set(entityId, { ...cur, ...patch });
     this.tileOverrides = map;
+    this.markDirty();
   }
 
-  private toggleBinding(entityId: string, attribute: string, render: AttributeRender, currentBindings: AttributeBinding[]): void {
+  private toggleBinding(entityId: string, attribute: string, render: AttributeRender | null, currentBindings: AttributeBinding[]): void {
     const idx = currentBindings.findIndex(b => b.attribute === attribute);
     let next: AttributeBinding[];
-    if (idx === -1) {
+    if (render === null) {
+      next = idx === -1 ? currentBindings : currentBindings.filter((_, i) => i !== idx);
+    } else if (idx === -1) {
       next = [...currentBindings, { attribute, render }];
-    } else if (currentBindings[idx]!.render !== render) {
+    } else {
       next = currentBindings.slice();
       next[idx] = { ...next[idx]!, render };
-    } else {
-      next = currentBindings.filter((_, i) => i !== idx);
     }
     this.setOverride(entityId, { bindings: next });
   }
@@ -182,17 +206,30 @@ export class SabWizard extends LitElement {
       settings: this.settings,
       rooms: newRooms,
     };
+    this.dirty = false;
     this.dispatchEvent(new CustomEvent('wizard-done', { bubbles: true, composed: true, detail: { dashboard } }));
   }
 
   private cancel(): void {
+    this.dirty = false;
     this.dispatchEvent(new CustomEvent('wizard-cancel', { bubbles: true, composed: true }));
   }
 
+  private requestClose(): void {
+    if (this.saving) return;
+    if (this.dirty) {
+      this.confirmDiscard = true;
+    } else {
+      this.cancel();
+    }
+  }
+  private confirmDiscardYes = (): void => { this.confirmDiscard = false; this.cancel(); };
+  private confirmDiscardNo = (): void => { this.confirmDiscard = false; };
+
   override render(): TemplateResult {
     return html`
-      <div class="overlay" @click=${this.cancel}>
-        <div class="wizard" @click=${(e: Event) => e.stopPropagation()}>
+      <div class="overlay">
+        <div class="wizard">
           <header>
             <div class="step-dots">
               <span class="dot ${this.step === 'settings' ? 'active' : ''}"></span>
@@ -200,11 +237,24 @@ export class SabWizard extends LitElement {
               <span class="dot ${this.step === 'devices' ? 'active' : ''}"></span>
               <span class="dot ${this.step === 'tiles' ? 'active' : ''}"></span>
             </div>
-            <button class="x" @click=${this.cancel} aria-label="Close">×</button>
+            ${this.dirty ? html`<span class="dirty-badge" title="Unsaved changes">●</span>` : ''}
+            <button class="x" @click=${this.requestClose} aria-label="Close">×</button>
           </header>
           ${this.saveError ? html`<div class="save-error"><strong>Could not save:</strong> ${this.saveError}</div>` : ''}
           ${this.renderStep()}
         </div>
+        ${this.confirmDiscard ? html`
+          <div class="confirm-overlay">
+            <div class="confirm-box">
+              <h2>Discard changes?</h2>
+              <p>Your edits in this wizard haven't been saved yet. Closing now will lose them.</p>
+              <div class="confirm-actions">
+                <button class="ghost" @click=${this.confirmDiscardNo}>Keep editing</button>
+                <button class="primary danger" @click=${this.confirmDiscardYes}>Discard</button>
+              </div>
+            </div>
+          </div>
+        ` : ''}
       </div>
     `;
   }
@@ -224,7 +274,7 @@ export class SabWizard extends LitElement {
 
       <label class="field">
         <span class="label">Dashboard name</span>
-        <input class="input" .value=${this.dashboardName} @input=${(e: Event) => { this.dashboardName = (e.target as HTMLInputElement).value; }} placeholder="Smart Home" />
+        <input class="input" .value=${this.dashboardName} @input=${(e: Event) => { this.dashboardName = (e.target as HTMLInputElement).value; this.markDirty(); }} placeholder="Smart Home" />
       </label>
 
       <div class="field">
@@ -276,7 +326,7 @@ export class SabWizard extends LitElement {
       </div>
 
       <footer>
-        <button class="ghost" @click=${this.cancel}>Cancel</button>
+        <button class="ghost" @click=${this.requestClose}>Cancel</button>
         <button class="primary" ?disabled=${!this.dashboardName.trim()} @click=${() => { this.step = 'rooms'; }}>Next: Rooms</button>
       </footer>
     `;
@@ -452,7 +502,6 @@ export class SabWizard extends LitElement {
     const def = smartDefaultsFor(device.family);
     const ov = this.getOverrides(device.entityId, def);
     const allAttrs = Object.keys(device.attributes).filter(k => !NOISE_ATTRS.has(k));
-    const renderModes: AttributeRender[] = ['text', 'slider', 'badge', 'sparkline'];
     const previewConfig = this.previewConfigFor(device, ov);
 
     return html`
@@ -500,10 +549,12 @@ export class SabWizard extends LitElement {
 
         <div class="bindings">
           <div class="cust-l small">Attributes</div>
-          ${this.renderAttributeRow(device.entityId, 'state', ov.bindings, renderModes, defaultBindingForFamily(device.family))}
+          ${this.renderAttributeRow(device.entityId, 'state', ov.bindings, availableRendersFor('state', device.state), defaultBindingForFamily(device.family))}
           ${allAttrs.map(a => {
-            const suggested = suggestRender(a, device.attributes[a]);
-            return this.renderAttributeRow(device.entityId, a, ov.bindings, renderModes, suggested);
+            const value = device.attributes[a];
+            const modes = availableRendersFor(a, value);
+            const suggested = suggestRender(a, value);
+            return this.renderAttributeRow(device.entityId, a, ov.bindings, modes, suggested);
           })}
         </div>
       </div>
@@ -521,7 +572,7 @@ export class SabWizard extends LitElement {
               @click=${() => this.toggleBinding(entityId, attr, m, bindings)}>${m}</button>
           `)}
           <button class="chip ${!current ? 'on' : ''}"
-            @click=${() => current && this.toggleBinding(entityId, attr, current.render, bindings)}>off</button>
+            @click=${() => this.toggleBinding(entityId, attr, null, bindings)}>off</button>
         </div>
       </div>
     `;
@@ -807,6 +858,48 @@ export class SabWizard extends LitElement {
 
     :host([dir="rtl"]) .dev-id, :host([dir="rtl"]) .input.mono, :host([dir="rtl"]) .room-name { direction: ltr; text-align: end; unicode-bidi: plaintext; }
     :host([dir="rtl"]) .dev { text-align: start; }
+
+    .dirty-badge {
+      color: var(--warning-color, #f59e0b);
+      font-size: 0.85rem;
+      margin-inline-start: auto;
+      margin-inline-end: 0.6rem;
+      animation: dirty-pulse 1.4s ease-in-out infinite;
+    }
+    @keyframes dirty-pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    .confirm-overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(0,0,0,0.55);
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+      z-index: 1;
+    }
+    .confirm-box {
+      background: var(--sab-surface);
+      color: var(--sab-text);
+      border: 1px solid var(--sab-divider);
+      border-radius: 18px;
+      padding: 1.5rem;
+      max-width: 420px;
+      width: 100%;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+    }
+    .confirm-box h2 { font-size: 1.15rem; font-weight: 700; margin: 0 0 0.4rem; letter-spacing: -0.02em; }
+    .confirm-box p { font-size: 0.9rem; color: var(--sab-muted); margin: 0 0 1.25rem; line-height: 1.5; }
+    .confirm-actions { display: flex; justify-content: flex-end; gap: 0.6rem; }
+    .confirm-actions .primary.danger {
+      background: var(--error-color, #ef4444);
+      color: #fff;
+    }
   `;
 }
 

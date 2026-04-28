@@ -99,7 +99,7 @@ export function isOnState(state: string): boolean {
 
 /** Suggest a render style for an attribute we don't have a smart default for. */
 export function suggestRender(attribute: string, value: unknown): AttributeRender {
-  if (typeof value === 'boolean') return 'badge';
+  if (typeof value === 'boolean') return 'toggle';
   if (typeof value === 'number') {
     if (/battery|signal|rssi/i.test(attribute)) return 'badge';
     if (/percent|brightness|level|position|volume|temperature|humidity/i.test(attribute) && value >= 0 && value <= 100) {
@@ -108,6 +108,22 @@ export function suggestRender(attribute: string, value: unknown): AttributeRende
     return 'text';
   }
   return 'text';
+}
+
+/** Restrict the render modes the user can pick to ones that actually fit the value. */
+export function availableRendersFor(attribute: string, value: unknown): AttributeRender[] {
+  if (attribute === 'state') {
+    return ['text', 'badge', 'sparkline', 'toggle'];
+  }
+  if (typeof value === 'boolean') return ['text', 'badge', 'toggle'];
+  if (typeof value === 'number') {
+    const isRangeable = value >= 0 && value <= 100 && /percent|brightness|level|position|volume|temperature|humidity|battery|signal/i.test(attribute);
+    return isRangeable
+      ? ['text', 'slider', 'badge', 'sparkline']
+      : ['text', 'badge', 'sparkline'];
+  }
+  if (typeof value === 'string') return ['text', 'badge'];
+  return ['text'];
 }
 
 /** Attributes we hide from the wizard - they're noise that doesn't help users. */

@@ -170,6 +170,7 @@ export class SabTileCard extends LitElement {
     const sliders = bindings.filter(b => b.render === 'slider' && isNumericAttr(b.attribute));
     const badges = bindings.filter(b => b.render === 'badge' && isPrimitiveAttr(b.attribute));
     const sparkline = bindings.find(b => b.render === 'sparkline' && isNumericAttr(b.attribute));
+    const toggles = bindings.filter(b => b.render === 'toggle' && isPrimitiveAttr(b.attribute));
 
     const accent = this.config.colorOverride ?? settings.accentColor;
     const density = settings.density;
@@ -228,8 +229,34 @@ export class SabTileCard extends LitElement {
             ${this.renderSparkline()}
           </div>
         ` : ''}
+
+        ${toggles.map(b => this.renderToggle(b, on, e))}
       </div>
     `;
+  }
+
+  private renderToggle(b: AttributeBinding, _entityOn: boolean, e?: HassEntity): TemplateResult {
+    if (!e) return html``;
+    const isStateAttr = b.attribute === 'state';
+    const value = isStateAttr ? toBool(e.state) : toBool(e.attributes[b.attribute]);
+    const label = b.label ?? prettyAttr(b.attribute);
+    const interactive = isStateAttr && this.isToggleable();
+    return html`
+      <div class="toggle-row" @click=${(ev: Event) => {
+        ev.stopPropagation();
+        if (interactive) void this.runPrimary();
+      }}>
+        <span class="toggle-label">${label}</span>
+        <span class="toggle ${value ? 'on' : 'off'} ${interactive ? '' : 'readonly'}" role="switch" aria-checked=${value ? 'true' : 'false'}>
+          <span class="knob"></span>
+        </span>
+      </div>
+    `;
+  }
+
+  private isToggleable(): boolean {
+    const f = this.family;
+    return f === 'light' || f === 'switch' || f === 'fan' || f === 'lock' || f === 'cover' || f === 'media';
   }
 
   private renderIcon(family: DeviceFamily): TemplateResult {
@@ -410,6 +437,42 @@ export class SabTileCard extends LitElement {
     .spark { margin-top: 0.55rem; color: var(--sab-accent); }
     .tile.on .spark { color: white; }
     .spark-empty { height: 36px; }
+
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      margin-top: 0.55rem;
+    }
+    .toggle-label { font-size: 0.8rem; opacity: 0.85; }
+    .toggle {
+      display: inline-block;
+      width: 36px;
+      height: 20px;
+      border-radius: 999px;
+      background: rgba(0,0,0,0.18);
+      position: relative;
+      transition: background 0.15s ease;
+      flex-shrink: 0;
+    }
+    .toggle.readonly { cursor: default; opacity: 0.7; }
+    .toggle:not(.readonly) { cursor: pointer; }
+    .toggle .knob {
+      position: absolute;
+      top: 2px;
+      inset-inline-start: 2px;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: currentColor;
+      transition: inset-inline-start 0.15s ease;
+    }
+    .toggle.on { background: var(--sab-accent); }
+    .toggle.on .knob { inset-inline-start: 18px; background: white; }
+    .tile.on .toggle { background: rgba(0,0,0,0.25); }
+    .tile.on .toggle.on { background: rgba(255,255,255,0.4); }
+    .tile.on .toggle.on .knob { background: white; }
   `;
 }
 
@@ -455,6 +518,16 @@ function formatAttr(e: HassEntity | undefined, attr: string): string {
 
 function prettyAttr(attr: string): string {
   return attr.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function toBool(v: unknown): boolean {
+  if (typeof v === 'boolean') return v;
+  if (typeof v === 'number') return v !== 0;
+  if (typeof v === 'string') {
+    const s = v.toLowerCase();
+    return s === 'on' || s === 'open' || s === 'unlocked' || s === 'playing' || s === 'cleaning' || s === 'true' || s === 'home' || s === 'heat' || s === 'cool' || s === 'auto';
+  }
+  return false;
 }
 
 function defaultStateLine(family: DeviceFamily, e: HassEntity): string {
