@@ -99,8 +99,10 @@ export class SabTileCard extends LitElement {
     if (!e) return;
     const family = this.family;
     const data = { entity_id: id };
-    const action = this.config.primaryAction;
-    if (action === 'none' || action == null) {
+    const action = this.config.primaryAction ?? 'auto';
+    if (action === 'none') return;
+    if (action === 'more_info') { fireMoreInfo(this, id); return; }
+    if (action === 'auto' || action === 'toggle') {
       switch (family) {
         case 'light':
         case 'switch':
@@ -116,11 +118,24 @@ export class SabTileCard extends LitElement {
           fireMoreInfo(this, id); return;
       }
     }
-    if (action === 'toggle') await this.hass.callService(family === 'media' ? 'media_player' : family, 'toggle', data);
-    else if (action === 'lock') await this.hass.callService('lock', 'lock', data);
-    else if (action === 'unlock') await this.hass.callService('lock', 'unlock', data);
-    else if (action === 'open') await this.hass.callService('cover', e.state === 'closed' ? 'open_cover' : 'close_cover', data);
-    else if (action === 'play_pause') await this.hass.callService('media_player', 'media_play_pause', data);
+    if (action === 'lock' || action === 'unlock') {
+      await this.hass.callService('lock', e.state === 'locked' ? 'unlock' : 'lock', data); return;
+    }
+    if (action === 'open') { await this.hass.callService('cover', e.state === 'closed' ? 'open_cover' : 'close_cover', data); return; }
+    if (action === 'play_pause') { await this.hass.callService('media_player', 'media_play_pause', data); return; }
+  }
+
+  private async mediaControl(service: string): Promise<void> {
+    if (!this.hass || !this.config) return;
+    await this.hass.callService('media_player', service, { entity_id: this.config.entity });
+  }
+
+  private async mediaMute(): Promise<void> {
+    if (!this.hass || !this.config) return;
+    const e = this.entity;
+    if (!e) return;
+    const cur = !!e.attributes['is_volume_muted'];
+    await this.hass.callService('media_player', 'volume_mute', { entity_id: this.config.entity, is_volume_muted: !cur });
   }
 
   private async onSlider(binding: AttributeBinding, e: Event): Promise<void> {
@@ -235,6 +250,25 @@ export class SabTileCard extends LitElement {
         ` : ''}
 
         ${toggles.map(b => this.renderToggle(b, on, e))}
+        ${family === 'media' && !unavailable ? this.renderMediaControls(e) : ''}
+      </div>
+    `;
+  }
+
+  private renderMediaControls(e?: HassEntity): TemplateResult {
+    if (!e) return html``;
+    const supported = (e.attributes['supported_features'] as number | undefined) ?? 0;
+    const can = (bit: number): boolean => supported === 0 || (supported & bit) !== 0;
+    // Bitmask values from media_player.const
+    const PREV = 16, NEXT = 32, MUTE = 8;
+    const stop = (ev: Event) => ev.stopPropagation();
+    const muted = !!e.attributes['is_volume_muted'];
+    return html`
+      <div class="media-controls" @pointerdown=${stop} @pointerup=${stop} @click=${stop}>
+        ${can(PREV) ? html`<button class="mc" @pointerup=${(ev: Event) => { ev.stopPropagation(); void this.mediaControl('media_previous_track'); }} title="Previous">⏮</button>` : ''}
+        <button class="mc primary-mc" @pointerup=${(ev: Event) => { ev.stopPropagation(); void this.mediaControl('media_play_pause'); }} title="Play/Pause">${e.state === 'playing' ? '⏸' : '▶'}</button>
+        ${can(NEXT) ? html`<button class="mc" @pointerup=${(ev: Event) => { ev.stopPropagation(); void this.mediaControl('media_next_track'); }} title="Next">⏭</button>` : ''}
+        ${can(MUTE) ? html`<button class="mc ${muted ? 'active' : ''}" @pointerup=${(ev: Event) => { ev.stopPropagation(); void this.mediaMute(); }} title="Mute">${muted ? '🔇' : '🔊'}</button>` : ''}
       </div>
     `;
   }
@@ -244,17 +278,18 @@ export class SabTileCard extends LitElement {
     const isStateAttr = b.attribute === 'state';
     const value = isStateAttr ? toBool(e.state) : toBool(e.attributes[b.attribute]);
     const label = b.label ?? prettyAttr(b.attribute);
-    const interactive = isStateAttr && this.isToggleable();
+    const interactive = this.toggleHandlerFor(b.attribute) != null;
     const stop = (ev: Event) => ev.stopPropagation();
     return html`
       <div
-        class="toggle-row"
+        class="toggle-row ${interactive ? 'interactive' : ''}"
         @pointerdown=${stop}
-        @pointerup=${stop}
+        @pointermove=${stop}
         @pointercancel=${stop}
-        @click=${(ev: Event) => {
+        @click=${stop}
+        @pointerup=${(ev: PointerEvent) => {
           ev.stopPropagation();
-          if (interactive) void this.runPrimary();
+          if (interactive) void this.runToggleAction(b.attribute);
         }}
       >
         <span class="toggle-label">${label}</span>
@@ -265,10 +300,30 @@ export class SabTileCard extends LitElement {
     `;
   }
 
-  private isToggleable(): boolean {
-    const f = this.family;
-    return f === 'light' || f === 'switch' || f === 'fan' || f === 'lock' || f === 'cover' || f === 'media';
+  private toggleHandlerFor(attribute: string): (() => Promise<void>) | null {
+    if (!this.hass || !this.config) return null;
+    const e = this.entity;
+    if (!e) return null;
+    const id = this.config.entity;
+    const family = this.family;
+    if (attribute === 'state') {
+      if (family === 'light' || family === 'switch' || family === 'fan') return async () => { await this.hass!.callService(family, 'toggle', { entity_id: id }); };
+      if (family === 'lock') return async () => { await this.hass!.callService('lock', e.state === 'locked' ? 'unlock' : 'lock', { entity_id: id }); };
+      if (family === 'cover') return async () => { await this.hass!.callService('cover', e.state === 'closed' ? 'open_cover' : 'close_cover', { entity_id: id }); };
+      if (family === 'media') return async () => { await this.hass!.callService('media_player', 'media_play_pause', { entity_id: id }); };
+      return null;
+    }
+    if (attribute === 'is_volume_muted' && family === 'media') {
+      return async () => { await this.hass!.callService('media_player', 'volume_mute', { entity_id: id, is_volume_muted: !toBool(e.attributes[attribute]) }); };
+    }
+    return null;
   }
+
+  private async runToggleAction(attribute: string): Promise<void> {
+    const handler = this.toggleHandlerFor(attribute);
+    if (handler) await handler();
+  }
+
 
   private renderIcon(family: DeviceFamily, heroImage?: string): TemplateResult {
     if (heroImage) {
@@ -465,8 +520,10 @@ export class SabTileCard extends LitElement {
       justify-content: space-between;
       gap: 0.5rem;
       margin-top: 0.55rem;
+      cursor: default;
     }
-    .toggle-label { font-size: 0.8rem; opacity: 0.85; }
+    .toggle-row.interactive { cursor: pointer; }
+    .toggle-label { font-size: 0.8rem; opacity: 0.85; pointer-events: none; }
     .toggle {
       display: inline-block;
       width: 36px;
@@ -494,6 +551,31 @@ export class SabTileCard extends LitElement {
     .tile.on .toggle { background: rgba(0,0,0,0.25); }
     .tile.on .toggle.on { background: rgba(255,255,255,0.4); }
     .tile.on .toggle.on .knob { background: white; }
+
+    .media-controls {
+      display: flex;
+      gap: 0.4rem;
+      margin-top: 0.55rem;
+      align-items: center;
+      justify-content: center;
+    }
+    .mc {
+      flex: 1;
+      min-width: 0;
+      padding: 0.45rem 0.6rem;
+      border: 0;
+      border-radius: 8px;
+      background: rgba(0,0,0,0.12);
+      color: currentColor;
+      font-size: 0.95rem;
+      cursor: pointer;
+      line-height: 1;
+    }
+    .mc:hover { background: rgba(0,0,0,0.2); }
+    .tile.on .mc { background: rgba(255,255,255,0.18); }
+    .tile.on .mc:hover { background: rgba(255,255,255,0.28); }
+    .mc.primary-mc { flex: 1.2; font-size: 1.1rem; }
+    .mc.active { background: var(--sab-accent); color: white; }
   `;
 }
 

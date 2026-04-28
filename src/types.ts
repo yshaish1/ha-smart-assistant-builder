@@ -11,7 +11,9 @@ export type DeviceFamily =
   | 'binary_sensor';
 
 export type PrimaryAction =
+  | 'auto'
   | 'toggle'
+  | 'more_info'
   | 'open'
   | 'lock'
   | 'unlock'

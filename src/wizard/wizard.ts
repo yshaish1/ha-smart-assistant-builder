@@ -1,7 +1,7 @@
 import { LitElement, css, html, nothing, type TemplateResult } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { HassAdapter } from '../ha/adapter.js';
-import type { AttributeBinding, AttributeRender, Dashboard, DashboardSettings, DeviceFamily, IconStyle, RealDevice, Room, Tile, TileSize } from '../types.js';
+import type { AttributeBinding, AttributeRender, Dashboard, DashboardSettings, DeviceFamily, IconStyle, PrimaryAction, RealDevice, Room, Tile, TileSize } from '../types.js';
 import { DEFAULT_SETTINGS } from '../types.js';
 import { groupByArea, listRealDevices } from '../ha/filter.js';
 import { NOISE_ATTRS, availableRendersFor, familyEmoji, smartDefaultsFor, suggestRender } from '../tiles/smart-defaults.js';
@@ -93,6 +93,7 @@ export class SabWizard extends LitElement {
           customIcon: t.customIcon ?? '',
           colorOverride: t.colorOverride ?? '',
           bindings: t.bindings.slice(),
+          primaryAction: t.primaryAction,
         });
       }
       this.selectedDevices = sel;
@@ -199,7 +200,7 @@ export class SabWizard extends LitElement {
           entityId: eid,
           family: dev.family,
           size: ov.size,
-          primaryAction: def.primaryAction,
+          primaryAction: ov.primaryAction ?? def.primaryAction,
           bindings: ov.bindings,
           ...(ov.customName ? { customName: ov.customName } : {}),
           ...(ov.customIcon ? { customIcon: ov.customIcon } : {}),
@@ -261,7 +262,11 @@ export class SabWizard extends LitElement {
                 Edit cards →
               </button>
             ` : ''}
-            ${this.dirty ? html`<span class="dirty-badge" title="Unsaved changes">●</span>` : ''}
+            ${this.dirty ? html`
+              <button class="primary small save-top" @click=${this.finish} ?disabled=${this.saving}>
+                ${this.saving ? 'Saving…' : 'Save'}
+              </button>
+            ` : ''}
             <button class="x" @click=${this.requestClose} aria-label="Close">×</button>
           </header>
           ${this.saveError ? html`<div class="save-error"><strong>Could not save:</strong> ${this.saveError}</div>` : ''}
@@ -577,6 +582,16 @@ export class SabWizard extends LitElement {
           </div>
         </div>
 
+        <div class="cust-row">
+          <span class="cust-l">On tap</span>
+          <div class="seg">
+            ${(['auto','toggle','more_info','none'] as PrimaryAction[]).map(act => html`
+              <button class="chip ${(ov.primaryAction ?? def.primaryAction) === act || (act === 'auto' && (ov.primaryAction === undefined || ov.primaryAction === 'auto')) ? 'on' : ''}"
+                @click=${() => this.setOverride(device.entityId, { primaryAction: act })}>${tapLabel(act)}</button>
+            `)}
+          </div>
+        </div>
+
         <div class="bindings">
           <div class="cust-l small">Attributes</div>
           ${this.renderAttributeRow(device.entityId, 'state', ov.bindings, availableRendersFor('state', device.state), defaultBindingForFamily(device.family))}
@@ -678,6 +693,12 @@ export class SabWizard extends LitElement {
       font-size: 0.8rem !important;
       padding: 0.4rem 0.85rem !important;
     }
+    .save-top {
+      margin-inline-start: auto;
+      font-size: 0.85rem !important;
+      padding: 0.45rem 0.95rem !important;
+    }
+    button.primary.small { padding: 0.45rem 0.95rem; font-size: 0.85rem; }
     .x {
       width: 32px; height: 32px; border-radius: 50%;
       border: 0; background: var(--sab-hover); color: var(--sab-text);
@@ -971,6 +992,7 @@ interface TileOverrides {
   customIcon: string;
   colorOverride: string;
   bindings: AttributeBinding[];
+  primaryAction?: PrimaryAction;
 }
 
 function defaultBindingForFamily(family: DeviceFamily): AttributeRender {
@@ -984,6 +1006,16 @@ function stepTitle(s: Step): string {
     case 'rooms': return 'Rooms';
     case 'devices': return 'Devices';
     case 'tiles': return 'Tiles';
+  }
+}
+
+function tapLabel(a: PrimaryAction): string {
+  switch (a) {
+    case 'auto': return 'auto';
+    case 'toggle': return 'toggle';
+    case 'more_info': return 'more info';
+    case 'none': return 'none';
+    default: return a;
   }
 }
 

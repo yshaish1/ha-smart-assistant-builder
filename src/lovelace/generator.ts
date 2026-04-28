@@ -53,11 +53,15 @@ function tileCardFor(tile: Tile, settings: DashboardSettings): Record<string, un
 function applyBackground(view: Record<string, unknown>, settings: DashboardSettings): void {
   const bg = settings.background;
   if (bg.type === 'image' && bg.url) {
-    view['background'] = { image: { url: bg.url, opacity: 100 } };
+    view['background'] = bg.url;
   } else if (bg.type === 'gradient') {
-    view['background'] = { color: `linear-gradient(135deg, ${bg.from}, ${bg.to})` };
+    // HA section views accept a URL/data-URI string for background. CSS
+    // linear-gradient() is not valid in Lovelace storage, so we render the
+    // gradient as an inline SVG and pass it as an image URL.
+    const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100' preserveAspectRatio='none'><defs><linearGradient id='g' x1='0%' y1='0%' x2='100%' y2='100%'><stop offset='0%' stop-color='${bg.from}'/><stop offset='100%' stop-color='${bg.to}'/></linearGradient></defs><rect width='100' height='100' fill='url(%23g)'/></svg>`;
+    view['background'] = `data:image/svg+xml;utf8,${encodeURIComponent(svg).replace(/%2523/g, '%23')}`;
   } else if (bg.type === 'solid' && bg.color) {
-    view['background'] = { color: bg.color };
+    view['background'] = bg.color;
   }
 }
 
