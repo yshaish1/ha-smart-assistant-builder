@@ -99,11 +99,24 @@ export function isOnState(state: string): boolean {
 
 /** Suggest a render style for an attribute we don't have a smart default for. */
 export function suggestRender(attribute: string, value: unknown): AttributeRender {
+  if (typeof value === 'boolean') return 'badge';
   if (typeof value === 'number') {
-    if (/percent|brightness|level|position|volume/i.test(attribute) || (value >= 0 && value <= 100)) {
-      return /battery|signal|level/i.test(attribute) ? 'badge' : 'slider';
+    if (/battery|signal|rssi/i.test(attribute)) return 'badge';
+    if (/percent|brightness|level|position|volume|temperature|humidity/i.test(attribute) && value >= 0 && value <= 100) {
+      return 'slider';
     }
     return 'text';
   }
   return 'text';
 }
+
+/** Attributes we hide from the wizard - they're noise that doesn't help users. */
+export const NOISE_ATTRS = new Set([
+  'friendly_name', 'supported_features', 'supported_color_modes', 'icon',
+  'restored', 'editable', 'assumed_state', 'attribution', 'unit_of_measurement',
+  'state_class', 'last_reset', 'options', 'event_types', 'min_color_temp_kelvin',
+  'max_color_temp_kelvin', 'min_mireds', 'max_mireds', 'effect_list', 'min_temp', 'max_temp',
+  'target_temp_step', 'fan_modes', 'preset_modes', 'hvac_modes', 'swing_modes',
+  'source_list', 'sound_mode_list', 'app_list', 'preset_mode',
+]);
+

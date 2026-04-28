@@ -4,7 +4,7 @@ import type { HassAdapter } from '../ha/adapter.js';
 import type { AttributeBinding, AttributeRender, Dashboard, DashboardSettings, DeviceFamily, IconStyle, RealDevice, Room, Tile, TileSize } from '../types.js';
 import { DEFAULT_SETTINGS } from '../types.js';
 import { groupByArea, listRealDevices } from '../ha/filter.js';
-import { familyEmoji, smartDefaultsFor, suggestRender } from '../tiles/smart-defaults.js';
+import { NOISE_ATTRS, familyEmoji, smartDefaultsFor, suggestRender } from '../tiles/smart-defaults.js';
 
 type Step = 'settings' | 'rooms' | 'devices' | 'tiles';
 
@@ -420,7 +420,7 @@ export class SabWizard extends LitElement {
   private renderTileEditor(roomName: string, device: RealDevice): TemplateResult {
     const def = smartDefaultsFor(device.family);
     const ov = this.getOverrides(device.entityId, def);
-    const allAttrs = Object.keys(device.attributes).filter(k => k !== 'friendly_name' && k !== 'supported_features' && k !== 'supported_color_modes' && k !== 'icon');
+    const allAttrs = Object.keys(device.attributes).filter(k => !NOISE_ATTRS.has(k));
     const renderModes: AttributeRender[] = ['text', 'slider', 'badge', 'sparkline'];
 
     return html`

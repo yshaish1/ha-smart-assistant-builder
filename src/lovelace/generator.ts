@@ -1,10 +1,12 @@
 import type { Dashboard, DashboardSettings, Tile, TileSize } from '../types.js';
 import type { LovelaceConfig } from './api.js';
 
-const SIZE_TO_GRID: Record<TileSize, { columns: number; rows: number }> = {
-  small: { columns: 6, rows: 1 },
-  medium: { columns: 12, rows: 1 },
-  large: { columns: 24, rows: 2 },
+// HA sections view uses a 12-column grid per section. Auto rows so the tile
+// can grow to fit its content (sparkline, multiple sliders, etc).
+const SIZE_TO_GRID: Record<TileSize, { columns: number }> = {
+  small: { columns: 3 },
+  medium: { columns: 6 },
+  large: { columns: 12 },
 };
 
 export function generateLovelaceConfig(dashboard: Dashboard): LovelaceConfig {
@@ -40,7 +42,7 @@ function tileCardFor(tile: Tile, settings: DashboardSettings): Record<string, un
     primaryAction: tile.primaryAction,
     bindings: tile.bindings,
     settings,
-    grid_options: { columns: grid.columns, rows: grid.rows },
+    grid_options: { columns: grid.columns, rows: 'auto' },
   };
   if (tile.customName) card['name'] = tile.customName;
   if (tile.customIcon) card['icon'] = tile.customIcon;

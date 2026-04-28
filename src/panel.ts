@@ -22,7 +22,7 @@ import { generateLovelaceConfig, isSabManagedConfig } from './lovelace/generator
 import './wizard/wizard.js';
 
 const RTL_LANGS = new Set(['he', 'ar', 'fa', 'ur']);
-const PANEL_VERSION = '0.4.0';
+const PANEL_VERSION = '0.4.1';
 const RESOURCE_URL = `/hacsfiles/ha-smart-assistant-builder/smart-assistant-builder.js?v=${PANEL_VERSION}`;
 
 @customElement('smart-assistant-panel')

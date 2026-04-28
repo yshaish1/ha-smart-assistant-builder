@@ -156,10 +156,20 @@ export class SabTileCard extends LitElement {
     const on = !unavailable && isOnState(state);
     const bindings = this.config.bindings ?? [];
 
-    const text = bindings.filter(b => b.render === 'text');
-    const sliders = bindings.filter(b => b.render === 'slider');
-    const badges = bindings.filter(b => b.render === 'badge');
-    const sparkline = bindings.find(b => b.render === 'sparkline');
+    const isNumericAttr = (attr: string): boolean => {
+      if (attr === 'state' && e) return Number.isFinite(parseFloat(e.state));
+      const v = e?.attributes[attr];
+      return typeof v === 'number';
+    };
+    const isPrimitiveAttr = (attr: string): boolean => {
+      if (attr === 'state') return true;
+      const v = e?.attributes[attr];
+      return v != null && (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean');
+    };
+    const text = bindings.filter(b => b.render === 'text' && isPrimitiveAttr(b.attribute));
+    const sliders = bindings.filter(b => b.render === 'slider' && isNumericAttr(b.attribute));
+    const badges = bindings.filter(b => b.render === 'badge' && isPrimitiveAttr(b.attribute));
+    const sparkline = bindings.find(b => b.render === 'sparkline' && isNumericAttr(b.attribute));
 
     const accent = this.config.colorOverride ?? settings.accentColor;
     const density = settings.density;
