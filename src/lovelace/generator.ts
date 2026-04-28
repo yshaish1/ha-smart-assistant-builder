@@ -1,33 +1,62 @@
-import type { Dashboard, Tile } from '../types.js';
+import type { Dashboard, DashboardSettings, Tile, TileSize } from '../types.js';
 import type { LovelaceConfig } from './api.js';
 
+const SIZE_TO_GRID: Record<TileSize, { columns: number; rows: number }> = {
+  small: { columns: 6, rows: 1 },
+  medium: { columns: 12, rows: 1 },
+  large: { columns: 24, rows: 2 },
+};
+
 export function generateLovelaceConfig(dashboard: Dashboard): LovelaceConfig {
+  const settings = dashboard.settings;
   const sections = dashboard.rooms.map(room => ({
     type: 'grid',
     cards: [
       { type: 'heading', heading: room.name },
-      ...room.tiles.map(tileCardFor),
+      ...room.tiles.map(t => tileCardFor(t, settings)),
     ],
   }));
 
+  const view: Record<string, unknown> = {
+    title: dashboard.name,
+    type: 'sections',
+    max_columns: settings.maxColumns,
+    sections,
+  };
+  applyBackground(view, settings);
+
   return {
     title: dashboard.name,
-    views: [
-      {
-        title: dashboard.name,
-        type: 'sections',
-        max_columns: 4,
-        sections,
-      },
-    ],
+    views: [view],
   };
 }
 
-function tileCardFor(tile: Tile): Record<string, unknown> {
-  return {
+function tileCardFor(tile: Tile, settings: DashboardSettings): Record<string, unknown> {
+  const grid = SIZE_TO_GRID[tile.size] ?? SIZE_TO_GRID.medium;
+  const card: Record<string, unknown> = {
     type: 'custom:sab-tile-card',
     entity: tile.entityId,
+    family: tile.family,
+    primaryAction: tile.primaryAction,
+    bindings: tile.bindings,
+    settings,
+    grid_options: { columns: grid.columns, rows: grid.rows },
   };
+  if (tile.customName) card['name'] = tile.customName;
+  if (tile.customIcon) card['icon'] = tile.customIcon;
+  if (tile.colorOverride) card['colorOverride'] = tile.colorOverride;
+  return card;
+}
+
+function applyBackground(view: Record<string, unknown>, settings: DashboardSettings): void {
+  const bg = settings.background;
+  if (bg.type === 'image' && bg.url) {
+    view['background'] = { image: { url: bg.url, opacity: 100 } };
+  } else if (bg.type === 'gradient') {
+    view['background'] = { color: `linear-gradient(135deg, ${bg.from}, ${bg.to})` };
+  } else if (bg.type === 'solid' && bg.color) {
+    view['background'] = { color: bg.color };
+  }
 }
 
 export function isSabManagedConfig(_cfg: unknown): boolean {

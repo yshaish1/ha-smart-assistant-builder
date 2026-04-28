@@ -3,6 +3,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 import type { HassAdapter } from './ha/adapter.js';
 import { RealHassAdapter, type HassLike } from './ha/adapter.real.js';
 import type { Dashboard, ManagedDashboard } from './types.js';
+import { DEFAULT_SETTINGS } from './types.js';
 import { ManagedConfigStore } from './store/managed.js';
 import { LocalConfigStorage } from './store/storage.local.js';
 import { HaConfigStorage } from './store/storage.ha.js';
@@ -21,7 +22,7 @@ import { generateLovelaceConfig, isSabManagedConfig } from './lovelace/generator
 import './wizard/wizard.js';
 
 const RTL_LANGS = new Set(['he', 'ar', 'fa', 'ur']);
-const PANEL_VERSION = '0.3.0';
+const PANEL_VERSION = '0.4.0';
 const RESOURCE_URL = `/hacsfiles/ha-smart-assistant-builder/smart-assistant-builder.js?v=${PANEL_VERSION}`;
 
 @customElement('smart-assistant-panel')
@@ -220,7 +221,7 @@ export class SmartAssistantPanel extends LitElement {
             urlPath: d.url_path,
             title: d.title,
             icon: d.icon ?? 'mdi:home-heart',
-            dashboard: { id: d.url_path, name: d.title, rooms: [] },
+            dashboard: { id: d.url_path, name: d.title, settings: { ...DEFAULT_SETTINGS }, rooms: [] },
             createdAt: Date.now(),
             updatedAt: Date.now(),
           });

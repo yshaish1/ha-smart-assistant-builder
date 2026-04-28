@@ -1,18 +1,14 @@
-import { LitElement, css, html, type TemplateResult } from 'lit';
+import { LitElement, css, html, nothing, type TemplateResult } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { HassAdapter } from '../ha/adapter.js';
-import type { Dashboard, RealDevice, Room, Tile } from '../types.js';
+import type { AttributeBinding, AttributeRender, Dashboard, DashboardSettings, DeviceFamily, IconStyle, RealDevice, Room, Tile, TileSize } from '../types.js';
+import { DEFAULT_SETTINGS } from '../types.js';
 import { groupByArea, listRealDevices } from '../ha/filter.js';
-import { familyIcon, smartDefaultsFor } from '../tiles/smart-defaults.js';
+import { familyEmoji, smartDefaultsFor, suggestRender } from '../tiles/smart-defaults.js';
 
-type Step = 'rooms' | 'devices' | 'tiles';
+type Step = 'settings' | 'rooms' | 'devices' | 'tiles';
 
-interface DraftRoom {
-  id: string;
-  name: string;
-  areaId?: string;
-  selected: boolean;
-}
+interface DraftRoom { id: string; name: string; areaId?: string; selected: boolean }
 
 let _uidCounter = 0;
 function uid(): string {
@@ -28,11 +24,12 @@ export class SabWizard extends LitElement {
   @property({ type: Boolean }) saving = false;
 
   @state() private dashboardName = 'Smart Home';
-  @state() private step: Step = 'rooms';
+  @state() private settings: DashboardSettings = { ...DEFAULT_SETTINGS };
+  @state() private step: Step = 'settings';
   @state() private rooms: DraftRoom[] = [];
   @state() private currentRoomIdx = 0;
   @state() private selectedDevices = new Map<string, Set<string>>();
-  @state() private customizedAttrs = new Map<string, Set<string>>();
+  @state() private tileOverrides = new Map<string, TileOverrides>();
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -44,27 +41,29 @@ export class SabWizard extends LitElement {
     const initial = this.initialDashboard;
     if (initial) {
       this.dashboardName = initial.name;
+      this.settings = { ...DEFAULT_SETTINGS, ...initial.settings };
       const drafts: DraftRoom[] = areas.map(a => {
         const existing = initial.rooms.find(r => r.areaId === a.area_id);
-        return {
-          id: existing?.id ?? uid(),
-          name: existing?.name ?? a.name,
-          areaId: a.area_id,
-          selected: !!existing,
-        };
+        return { id: existing?.id ?? uid(), name: existing?.name ?? a.name, areaId: a.area_id, selected: !!existing };
       });
       const customRooms = initial.rooms.filter(r => !r.areaId);
       for (const r of customRooms) drafts.push({ id: r.id, name: r.name, selected: true });
-      drafts.push({ id: uid(), name: 'Unassigned', selected: !!initial.rooms.find(r => r.id === '__unassigned') });
+      drafts.push({ id: uid(), name: 'Unassigned', selected: false });
       this.rooms = drafts;
       const sel = new Map<string, Set<string>>();
-      const cust = new Map<string, Set<string>>();
+      const overrides = new Map<string, TileOverrides>();
       for (const r of initial.rooms) {
         sel.set(r.id, new Set(r.tiles.map(t => t.entityId)));
-        for (const t of r.tiles) cust.set(t.entityId, new Set(t.attributes));
+        for (const t of r.tiles) overrides.set(t.entityId, {
+          size: t.size,
+          customName: t.customName ?? '',
+          customIcon: t.customIcon ?? '',
+          colorOverride: t.colorOverride ?? '',
+          bindings: t.bindings.slice(),
+        });
       }
       this.selectedDevices = sel;
-      this.customizedAttrs = cust;
+      this.tileOverrides = overrides;
     } else {
       const drafts: DraftRoom[] = areas.map(a => ({ id: uid(), name: a.name, areaId: a.area_id, selected: true }));
       drafts.push({ id: uid(), name: 'Unassigned', selected: false });
@@ -72,15 +71,16 @@ export class SabWizard extends LitElement {
     }
   }
 
+  private setSetting<K extends keyof DashboardSettings>(key: K, value: DashboardSettings[K]): void {
+    this.settings = { ...this.settings, [key]: value };
+  }
+
   private toggleRoom(idx: number): void {
-    const next = this.rooms.slice();
-    next[idx] = { ...next[idx]!, selected: !next[idx]!.selected };
+    const next = this.rooms.slice(); next[idx] = { ...next[idx]!, selected: !next[idx]!.selected };
     this.rooms = next;
   }
   private renameRoom(idx: number, name: string): void {
-    const next = this.rooms.slice();
-    next[idx] = { ...next[idx]!, name };
-    this.rooms = next;
+    const next = this.rooms.slice(); next[idx] = { ...next[idx]!, name }; this.rooms = next;
   }
   private addCustomRoom(): void {
     this.rooms = [...this.rooms.filter(r => r.name !== 'Unassigned'), { id: uid(), name: 'New Room', selected: true }, { id: uid(), name: 'Unassigned', selected: false }];
@@ -88,19 +88,23 @@ export class SabWizard extends LitElement {
 
   private get selectedRooms(): DraftRoom[] { return this.rooms.filter(r => r.selected); }
 
-  private goToDevices(): void {
-    if (this.selectedRooms.length === 0) return;
-    this.step = 'devices';
-    this.currentRoomIdx = 0;
-  }
-
   private toggleDevice(roomId: string, entityId: string): void {
     const set = new Map(this.selectedDevices);
     const cur = new Set(set.get(roomId) ?? []);
-    if (cur.has(entityId)) cur.delete(entityId); else cur.add(entityId);
+    if (cur.has(entityId)) cur.delete(entityId); else {
+      // Remove from any other room first - a tile can only be in one room
+      for (const [otherId, others] of set) {
+        if (otherId !== roomId && others.has(entityId)) {
+          const next = new Set(others); next.delete(entityId);
+          set.set(otherId, next);
+        }
+      }
+      cur.add(entityId);
+    }
     set.set(roomId, cur);
     this.selectedDevices = set;
   }
+
   private nextRoomOrTiles(): void {
     if (this.currentRoomIdx < this.selectedRooms.length - 1) this.currentRoomIdx += 1;
     else this.step = 'tiles';
@@ -109,12 +113,36 @@ export class SabWizard extends LitElement {
     if (this.currentRoomIdx > 0) this.currentRoomIdx -= 1;
     else this.step = 'rooms';
   }
-  private toggleAttr(entityId: string, attr: string): void {
-    const map = new Map(this.customizedAttrs);
-    const cur = new Set(map.get(entityId) ?? []);
-    if (cur.has(attr)) cur.delete(attr); else cur.add(attr);
-    map.set(entityId, cur);
-    this.customizedAttrs = map;
+
+  private getOverrides(entityId: string, defaults: ReturnType<typeof smartDefaultsFor>): TileOverrides {
+    return this.tileOverrides.get(entityId) ?? {
+      size: defaults.size,
+      customName: '',
+      customIcon: '',
+      colorOverride: '',
+      bindings: defaults.bindings.slice(),
+    };
+  }
+
+  private setOverride(entityId: string, patch: Partial<TileOverrides>): void {
+    const map = new Map(this.tileOverrides);
+    const cur = map.get(entityId) ?? this.getOverrides(entityId, smartDefaultsFor('switch'));
+    map.set(entityId, { ...cur, ...patch });
+    this.tileOverrides = map;
+  }
+
+  private toggleBinding(entityId: string, attribute: string, render: AttributeRender, currentBindings: AttributeBinding[]): void {
+    const idx = currentBindings.findIndex(b => b.attribute === attribute);
+    let next: AttributeBinding[];
+    if (idx === -1) {
+      next = [...currentBindings, { attribute, render }];
+    } else if (currentBindings[idx]!.render !== render) {
+      next = currentBindings.slice();
+      next[idx] = { ...next[idx]!, render };
+    } else {
+      next = currentBindings.filter((_, i) => i !== idx);
+    }
+    this.setOverride(entityId, { bindings: next });
   }
 
   private finish(): void {
@@ -126,19 +154,21 @@ export class SabWizard extends LitElement {
       const tiles: Tile[] = entityIds.map(eid => {
         const dev = byEntity.get(eid)!;
         const def = smartDefaultsFor(dev.family);
-        const customized = this.customizedAttrs.get(eid);
+        const ov = this.getOverrides(eid, def);
         return {
           id: uid(),
           entityId: eid,
           family: dev.family,
-          attributes: customized ? Array.from(customized) : def.attributes,
+          size: ov.size,
           primaryAction: def.primaryAction,
-          size: 'medium',
+          bindings: ov.bindings,
+          ...(ov.customName ? { customName: ov.customName } : {}),
+          ...(ov.customIcon ? { customIcon: ov.customIcon } : {}),
+          ...(ov.colorOverride ? { colorOverride: ov.colorOverride } : {}),
         };
       });
-      newRooms.push({
-        id: draft.id,
-        name: draft.name,
+      if (tiles.length > 0) newRooms.push({
+        id: draft.id, name: draft.name,
         ...(draft.areaId ? { areaId: draft.areaId } : {}),
         tiles,
       });
@@ -146,7 +176,8 @@ export class SabWizard extends LitElement {
     const dashboard: Dashboard = {
       id: this.initialDashboard?.id ?? uid(),
       name: this.dashboardName.trim() || 'Smart Home',
-      rooms: newRooms.filter(r => r.tiles.length > 0),
+      settings: this.settings,
+      rooms: newRooms,
     };
     this.dispatchEvent(new CustomEvent('wizard-done', { bubbles: true, composed: true, detail: { dashboard } }));
   }
@@ -161,6 +192,7 @@ export class SabWizard extends LitElement {
         <div class="wizard" @click=${(e: Event) => e.stopPropagation()}>
           <header>
             <div class="step-dots">
+              <span class="dot ${this.step === 'settings' ? 'active' : ''}"></span>
               <span class="dot ${this.step === 'rooms' ? 'active' : ''}"></span>
               <span class="dot ${this.step === 'devices' ? 'active' : ''}"></span>
               <span class="dot ${this.step === 'tiles' ? 'active' : ''}"></span>
@@ -175,42 +207,125 @@ export class SabWizard extends LitElement {
   }
 
   private renderStep(): TemplateResult {
+    if (this.step === 'settings') return this.renderSettings();
     if (this.step === 'rooms') return this.renderRooms();
     if (this.step === 'devices') return this.renderDevices();
     return this.renderTiles();
   }
 
-  private renderRooms(): TemplateResult {
+  private renderSettings(): TemplateResult {
+    const s = this.settings;
     return html`
       <h1>${this.mode === 'edit' ? 'Edit dashboard' : 'New dashboard'}</h1>
-      <p class="sub">Name your dashboard, then pick rooms. Areas come from Home Assistant.</p>
-      <label class="name-row">
+      <p class="sub">Name your dashboard and pick a layout. You can change everything later.</p>
+
+      <label class="field">
         <span class="label">Dashboard name</span>
-        <input
-          class="name-input"
-          .value=${this.dashboardName}
-          @input=${(e: Event) => { this.dashboardName = (e.target as HTMLInputElement).value; }}
-          placeholder="Smart Home"
-        />
+        <input class="input" .value=${this.dashboardName} @input=${(e: Event) => { this.dashboardName = (e.target as HTMLInputElement).value; }} placeholder="Smart Home" />
       </label>
-      <div class="section-title">Rooms</div>
+
+      <div class="field">
+        <span class="label">Layout</span>
+        <div class="row">
+          <div class="seg">
+            <span class="seg-l">Max columns</span>
+            ${[1, 2, 3, 4].map(n => html`
+              <button class="chip ${s.maxColumns === n ? 'on' : ''}" @click=${() => this.setSetting('maxColumns', n as 1|2|3|4)}>${n}</button>
+            `)}
+          </div>
+        </div>
+        <div class="row">
+          <div class="seg">
+            <span class="seg-l">Density</span>
+            ${(['compact','comfortable','spacious'] as const).map(d => html`
+              <button class="chip ${s.density === d ? 'on' : ''}" @click=${() => this.setSetting('density', d)}>${d}</button>
+            `)}
+          </div>
+        </div>
+      </div>
+
+      <label class="field">
+        <span class="label">Accent color</span>
+        <div class="row inline">
+          <input class="color-input" type="color" .value=${s.accentColor} @input=${(e: Event) => this.setSetting('accentColor', (e.target as HTMLInputElement).value)} />
+          <code class="hex">${s.accentColor}</code>
+          <button class="ghost small" @click=${() => this.setSetting('accentColor', '#6366f1')}>Reset</button>
+        </div>
+      </label>
+
+      <div class="field">
+        <span class="label">Icon style</span>
+        <div class="seg">
+          ${(['emoji','mdi','off'] as IconStyle[]).map(v => html`
+            <button class="chip ${s.iconStyle === v ? 'on' : ''}" @click=${() => this.setSetting('iconStyle', v)}>${v}</button>
+          `)}
+        </div>
+      </div>
+
+      <div class="field">
+        <span class="label">Background</span>
+        <div class="seg">
+          ${(['solid','gradient','image'] as const).map(t => html`
+            <button class="chip ${s.background.type === t ? 'on' : ''}" @click=${() => this.setBackgroundType(t)}>${t}</button>
+          `)}
+        </div>
+        ${this.renderBackgroundFields()}
+      </div>
+
+      <footer>
+        <button class="ghost" @click=${this.cancel}>Cancel</button>
+        <button class="primary" ?disabled=${!this.dashboardName.trim()} @click=${() => { this.step = 'rooms'; }}>Next: Rooms</button>
+      </footer>
+    `;
+  }
+
+  private setBackgroundType(t: 'solid' | 'gradient' | 'image'): void {
+    if (t === 'solid') this.setSetting('background', { type: 'solid', color: '' });
+    else if (t === 'gradient') this.setSetting('background', { type: 'gradient', from: '#e0e7ff', to: '#fafafa' });
+    else this.setSetting('background', { type: 'image', url: '' });
+  }
+
+  private renderBackgroundFields(): TemplateResult | typeof nothing {
+    const bg = this.settings.background;
+    if (bg.type === 'solid') {
+      return html`
+        <div class="row inline">
+          <input class="color-input" type="color" .value=${bg.color || '#ffffff'} @input=${(e: Event) => this.setSetting('background', { type: 'solid', color: (e.target as HTMLInputElement).value })} />
+          <code class="hex">${bg.color || 'theme default'}</code>
+          <button class="ghost small" @click=${() => this.setSetting('background', { type: 'solid', color: '' })}>Use theme default</button>
+        </div>
+      `;
+    }
+    if (bg.type === 'gradient') {
+      return html`
+        <div class="row inline">
+          <input class="color-input" type="color" .value=${bg.from} @input=${(e: Event) => this.setSetting('background', { ...bg, from: (e.target as HTMLInputElement).value })} />
+          <span class="hex">→</span>
+          <input class="color-input" type="color" .value=${bg.to} @input=${(e: Event) => this.setSetting('background', { ...bg, to: (e.target as HTMLInputElement).value })} />
+        </div>
+      `;
+    }
+    return html`
+      <input class="input" type="url" placeholder="https://..." .value=${bg.url} @input=${(e: Event) => this.setSetting('background', { type: 'image', url: (e.target as HTMLInputElement).value })} />
+    `;
+  }
+
+  private renderRooms(): TemplateResult {
+    return html`
+      <h1>Rooms</h1>
+      <p class="sub">Pick which rooms appear on this dashboard. Areas come from Home Assistant.</p>
       <div class="rooms-grid">
         ${this.rooms.map((r, i) => html`
           <button class="room-pick ${r.selected ? 'selected' : ''}" @click=${() => this.toggleRoom(i)}>
-            <input
-              class="room-name"
-              .value=${r.name}
-              @click=${(e: Event) => e.stopPropagation()}
-              @input=${(e: Event) => this.renameRoom(i, (e.target as HTMLInputElement).value)}
-            />
+            <input class="room-name" .value=${r.name} @click=${(e: Event) => e.stopPropagation()} @input=${(e: Event) => this.renameRoom(i, (e.target as HTMLInputElement).value)} />
             <span class="check">${r.selected ? '✓' : '+'}</span>
           </button>
         `)}
       </div>
       <button class="add" @click=${this.addCustomRoom}>+ Add custom room</button>
       <footer>
-        <button class="ghost" @click=${this.cancel}>Cancel</button>
-        <button class="primary" ?disabled=${this.selectedRooms.length === 0 || !this.dashboardName.trim()} @click=${this.goToDevices}>Next: Pick devices</button>
+        <button class="ghost" @click=${() => { this.step = 'settings'; }}>Back</button>
+        <button class="primary" ?disabled=${this.selectedRooms.length === 0} @click=${() => { this.step = 'devices'; this.currentRoomIdx = 0; }}>Next: Devices</button>
       </footer>
     `;
   }
@@ -220,23 +335,43 @@ export class SabWizard extends LitElement {
     if (!room) return html``;
     const allDevices = listRealDevices(this.adapter);
     const byArea = groupByArea(allDevices);
-    const candidates = room.areaId ? (byArea.get(room.areaId) ?? []) : (byArea.get(null) ?? []);
+    const inArea = room.areaId ? new Set((byArea.get(room.areaId) ?? []).map(d => d.entityId)) : new Set<string>();
     const selected = this.selectedDevices.get(room.id) ?? new Set();
+    const otherRoomMap = new Map<string, string>();
+    for (const r of this.selectedRooms) {
+      if (r.id === room.id) continue;
+      const ids = this.selectedDevices.get(r.id) ?? new Set();
+      for (const id of ids) otherRoomMap.set(id, r.name);
+    }
+    const sorted = [...allDevices].sort((a, b) => {
+      const ai = inArea.has(a.entityId) ? 0 : 1;
+      const bi = inArea.has(b.entityId) ? 0 : 1;
+      if (ai !== bi) return ai - bi;
+      return a.friendlyName.localeCompare(b.friendlyName);
+    });
+
     return html`
       <h1>${room.name}</h1>
-      <p class="sub">Pick devices for this room. Room ${this.currentRoomIdx + 1} of ${this.selectedRooms.length}.</p>
-      ${candidates.length === 0 ? html`<div class="empty-cands">No real devices in this area. You can continue and assign devices later.</div>` : ''}
+      <p class="sub">Pick devices for this room. Devices in this area are listed first. Room ${this.currentRoomIdx + 1} of ${this.selectedRooms.length}.</p>
       <div class="devs">
-        ${candidates.map(d => html`
-          <button class="dev ${selected.has(d.entityId) ? 'selected' : ''}" @click=${() => this.toggleDevice(room.id, d.entityId)}>
-            <span class="dev-icon">${familyIcon(d.family)}</span>
-            <div class="dev-meta">
-              <div class="dev-name">${d.friendlyName}</div>
-              <div class="dev-id">${d.entityId}</div>
-            </div>
-            <span class="check">${selected.has(d.entityId) ? '✓' : '+'}</span>
-          </button>
-        `)}
+        ${sorted.map(d => {
+          const isSelected = selected.has(d.entityId);
+          const inThisArea = inArea.has(d.entityId);
+          const otherRoom = otherRoomMap.get(d.entityId);
+          return html`
+            <button class="dev ${isSelected ? 'selected' : ''}" @click=${() => this.toggleDevice(room.id, d.entityId)}>
+              <span class="dev-icon">${familyEmoji(d.family)}</span>
+              <div class="dev-meta">
+                <div class="dev-name">${d.friendlyName}</div>
+                <div class="dev-id">${d.entityId}</div>
+              </div>
+              ${inThisArea ? html`<span class="tag in-area">in this area</span>` : ''}
+              ${otherRoom ? html`<span class="tag other">in ${otherRoom}</span>` : ''}
+              <span class="check">${isSelected ? '✓' : '+'}</span>
+            </button>
+          `;
+        })}
+        ${sorted.length === 0 ? html`<div class="empty-cands">No real devices found.</div>` : ''}
       </div>
       <footer>
         <button class="ghost" @click=${this.prevRoom}>Back</button>
@@ -269,30 +404,9 @@ export class SabWizard extends LitElement {
     }
     return html`
       <h1>Customize tiles</h1>
-      <p class="sub">Smart defaults are pre-selected. Tap to add or remove attributes.</p>
+      <p class="sub">For each device, pick a size and choose how each attribute is displayed.</p>
       <div class="tiles-list">
-        ${picked.map(({ roomName, device }) => {
-          const def = smartDefaultsFor(device.family);
-          const allAttrs = Object.keys(device.attributes).filter(k => k !== 'friendly_name' && k !== 'supported_features' && k !== 'supported_color_modes');
-          const customized = this.customizedAttrs.get(device.entityId);
-          const active = customized ?? new Set(def.attributes);
-          return html`
-            <div class="tile-cust">
-              <div class="tile-cust-h">
-                <span class="dev-icon">${familyIcon(device.family)}</span>
-                <div>
-                  <div class="dev-name">${device.friendlyName}</div>
-                  <div class="dev-id">${roomName}</div>
-                </div>
-              </div>
-              <div class="attrs">
-                ${allAttrs.map(a => html`
-                  <button class="attr ${active.has(a) ? 'on' : ''}" @click=${() => this.toggleAttr(device.entityId, a)}>${a}</button>
-                `)}
-              </div>
-            </div>
-          `;
-        })}
+        ${picked.map(({ roomName, device }) => this.renderTileEditor(roomName, device))}
       </div>
       <footer>
         <button class="ghost" @click=${() => { this.step = 'devices'; this.currentRoomIdx = 0; }} ?disabled=${this.saving}>Back</button>
@@ -300,6 +414,81 @@ export class SabWizard extends LitElement {
           ${this.saving ? 'Saving…' : (this.mode === 'edit' ? 'Save changes' : 'Create dashboard')}
         </button>
       </footer>
+    `;
+  }
+
+  private renderTileEditor(roomName: string, device: RealDevice): TemplateResult {
+    const def = smartDefaultsFor(device.family);
+    const ov = this.getOverrides(device.entityId, def);
+    const allAttrs = Object.keys(device.attributes).filter(k => k !== 'friendly_name' && k !== 'supported_features' && k !== 'supported_color_modes' && k !== 'icon');
+    const renderModes: AttributeRender[] = ['text', 'slider', 'badge', 'sparkline'];
+
+    return html`
+      <div class="tile-cust">
+        <div class="tile-cust-h">
+          <span class="dev-icon">${familyEmoji(device.family)}</span>
+          <div>
+            <div class="dev-name">${ov.customName || device.friendlyName}</div>
+            <div class="dev-id">${roomName} · ${device.entityId}</div>
+          </div>
+        </div>
+
+        <div class="cust-row">
+          <span class="cust-l">Size</span>
+          <div class="seg">
+            ${(['small','medium','large'] as TileSize[]).map(s => html`
+              <button class="chip ${ov.size === s ? 'on' : ''}" @click=${() => this.setOverride(device.entityId, { size: s })}>${s}</button>
+            `)}
+          </div>
+        </div>
+
+        <div class="cust-row">
+          <span class="cust-l">Custom name</span>
+          <input class="input small" .value=${ov.customName} placeholder=${device.friendlyName}
+            @input=${(e: Event) => this.setOverride(device.entityId, { customName: (e.target as HTMLInputElement).value })} />
+        </div>
+
+        <div class="cust-row">
+          <span class="cust-l">Custom icon</span>
+          <input class="input small mono" .value=${ov.customIcon} placeholder="mdi:home or 🏠"
+            @input=${(e: Event) => this.setOverride(device.entityId, { customIcon: (e.target as HTMLInputElement).value })} />
+        </div>
+
+        <div class="cust-row">
+          <span class="cust-l">Color override</span>
+          <div class="row inline">
+            <input class="color-input" type="color" .value=${ov.colorOverride || this.settings.accentColor}
+              @input=${(e: Event) => this.setOverride(device.entityId, { colorOverride: (e.target as HTMLInputElement).value })} />
+            <button class="ghost small" @click=${() => this.setOverride(device.entityId, { colorOverride: '' })}>Use accent</button>
+          </div>
+        </div>
+
+        <div class="bindings">
+          <div class="cust-l small">Attributes</div>
+          ${this.renderAttributeRow(device.entityId, 'state', ov.bindings, renderModes, defaultBindingForFamily(device.family))}
+          ${allAttrs.map(a => {
+            const suggested = suggestRender(a, device.attributes[a]);
+            return this.renderAttributeRow(device.entityId, a, ov.bindings, renderModes, suggested);
+          })}
+        </div>
+      </div>
+    `;
+  }
+
+  private renderAttributeRow(entityId: string, attr: string, bindings: AttributeBinding[], modes: AttributeRender[], suggested: AttributeRender): TemplateResult {
+    const current = bindings.find(b => b.attribute === attr);
+    return html`
+      <div class="bind-row">
+        <code class="bind-attr">${attr}</code>
+        <div class="seg small">
+          ${modes.map(m => html`
+            <button class="chip ${current?.render === m ? 'on' : ''} ${!current && m === suggested ? 'suggested' : ''}"
+              @click=${() => this.toggleBinding(entityId, attr, m, bindings)}>${m}</button>
+          `)}
+          <button class="chip ${!current ? 'on' : ''}"
+            @click=${() => current && this.toggleBinding(entityId, attr, current.render, bindings)}>off</button>
+        </div>
+      </div>
     `;
   }
 
@@ -330,7 +519,7 @@ export class SabWizard extends LitElement {
     }
     .wizard {
       width: 100%;
-      max-width: 720px;
+      max-width: 760px;
       max-height: 90vh;
       overflow-y: auto;
       background: var(--sab-surface);
@@ -366,9 +555,21 @@ export class SabWizard extends LitElement {
     h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em; margin: 0 0 0.4rem; color: var(--sab-text); }
     .sub { font-size: 0.95rem; color: var(--sab-muted); margin: 0 0 1.25rem; }
 
-    .name-row { display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 1.25rem; }
+    .save-error {
+      padding: 0.85rem 1rem;
+      border-radius: 10px;
+      background: color-mix(in srgb, var(--error-color, #ef4444) 12%, transparent);
+      border: 1px solid color-mix(in srgb, var(--error-color, #ef4444) 50%, transparent);
+      color: var(--error-color, #ef4444);
+      margin-bottom: 1rem;
+      font-size: 0.85rem;
+      line-height: 1.4;
+      word-break: break-word;
+    }
+
+    .field { display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 1.1rem; }
     .label { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--sab-muted); }
-    .name-input {
+    .input {
       padding: 0.65rem 0.85rem;
       border-radius: 10px;
       border: 1px solid var(--sab-divider);
@@ -378,9 +579,34 @@ export class SabWizard extends LitElement {
       outline: none;
       font-family: inherit;
     }
-    .name-input:focus { border-color: var(--sab-accent); }
+    .input.small { padding: 0.45rem 0.65rem; font-size: 0.85rem; }
+    .input.mono { font-family: ui-monospace, monospace; }
+    .input:focus { border-color: var(--sab-accent); }
 
-    .section-title { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--sab-muted); margin-bottom: 0.5rem; }
+    .row { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; }
+    .row.inline { gap: 0.5rem; }
+
+    .seg { display: inline-flex; gap: 0.3rem; align-items: center; flex-wrap: wrap; }
+    .seg-l { font-size: 0.8rem; color: var(--sab-muted); margin-right: 0.5rem; }
+    .seg.small .chip { font-size: 0.7rem; padding: 0.25rem 0.55rem; }
+
+    .chip {
+      padding: 0.4rem 0.8rem;
+      border-radius: 999px;
+      border: 1px solid var(--sab-divider);
+      background: transparent;
+      color: var(--sab-muted);
+      font-size: 0.8rem;
+      cursor: pointer;
+      font-family: inherit;
+      text-transform: capitalize;
+    }
+    .chip:hover { background: var(--sab-hover); }
+    .chip.on { background: var(--sab-accent); color: var(--sab-on-accent); border-color: var(--sab-accent); }
+    .chip.suggested { border-style: dashed; }
+
+    .color-input { width: 36px; height: 36px; border: 1px solid var(--sab-divider); border-radius: 8px; cursor: pointer; padding: 0; background: none; }
+    .hex { font-family: ui-monospace, monospace; font-size: 0.8rem; color: var(--sab-muted); }
 
     .rooms-grid {
       display: grid;
@@ -401,17 +627,7 @@ export class SabWizard extends LitElement {
     }
     .room-pick:hover { background: var(--sab-divider); }
     .room-pick.selected { background: color-mix(in srgb, var(--sab-accent) 15%, transparent); border-color: var(--sab-accent); }
-    .room-name {
-      flex: 1;
-      background: transparent;
-      border: 0;
-      color: var(--sab-text);
-      font-size: 0.95rem;
-      font-weight: 600;
-      outline: none;
-      width: 100%;
-      font-family: inherit;
-    }
+    .room-name { flex: 1; background: transparent; border: 0; color: var(--sab-text); font-size: 0.95rem; font-weight: 600; outline: none; width: 100%; font-family: inherit; }
     .check {
       width: 26px; height: 26px;
       border-radius: 50%;
@@ -457,13 +673,23 @@ export class SabWizard extends LitElement {
     .dev-name { font-weight: 600; font-size: 0.95rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--sab-text); }
     .dev-id { font-size: 0.75rem; color: var(--sab-muted); font-family: ui-monospace, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+    .tag {
+      font-size: 0.7rem;
+      padding: 0.15rem 0.55rem;
+      border-radius: 999px;
+      background: var(--sab-divider);
+      color: var(--sab-muted);
+      flex-shrink: 0;
+    }
+    .tag.in-area { background: color-mix(in srgb, var(--sab-accent) 18%, transparent); color: var(--sab-accent); }
+    .tag.other { background: color-mix(in srgb, var(--error-color, #ef4444) 14%, transparent); color: var(--error-color, #ef4444); }
+
     .empty-cands {
       padding: 2rem;
       text-align: center;
       color: var(--sab-muted);
       border: 1px dashed var(--sab-divider);
       border-radius: 14px;
-      margin-bottom: 1rem;
     }
 
     .tiles-list { display: flex; flex-direction: column; gap: 0.85rem; margin-bottom: 1rem; }
@@ -473,19 +699,29 @@ export class SabWizard extends LitElement {
       background: var(--sab-hover);
       border: 1px solid var(--sab-divider);
     }
-    .tile-cust-h { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem; }
-    .attrs { display: flex; flex-wrap: wrap; gap: 0.4rem; }
-    .attr {
-      padding: 0.4rem 0.8rem;
-      border-radius: 999px;
-      border: 1px solid var(--sab-divider);
-      background: transparent;
-      color: var(--sab-muted);
-      font-size: 0.75rem;
-      cursor: pointer;
-      font-family: ui-monospace, monospace;
+    .tile-cust-h { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.85rem; }
+    .cust-row { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem; flex-wrap: wrap; }
+    .cust-l { font-size: 0.75rem; color: var(--sab-muted); min-width: 110px; }
+    .cust-l.small { min-width: auto; }
+
+    .bindings { margin-top: 0.85rem; border-top: 1px solid var(--sab-divider); padding-top: 0.85rem; }
+    .bind-row {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      padding: 0.4rem 0;
+      border-bottom: 1px solid color-mix(in srgb, var(--sab-divider) 50%, transparent);
     }
-    .attr.on { background: var(--sab-accent); color: var(--sab-on-accent); border-color: var(--sab-accent); }
+    .bind-row:last-child { border-bottom: 0; }
+    .bind-attr {
+      flex: 0 0 35%;
+      font-family: ui-monospace, monospace;
+      font-size: 0.8rem;
+      color: var(--sab-text);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
 
     footer {
       position: sticky;
@@ -510,18 +746,6 @@ export class SabWizard extends LitElement {
     }
     button.primary:hover { filter: brightness(0.95); }
     button.primary[disabled] { opacity: 0.5; cursor: not-allowed; }
-
-    .save-error {
-      padding: 0.85rem 1rem;
-      border-radius: 10px;
-      background: color-mix(in srgb, var(--error-color, #ef4444) 12%, transparent);
-      border: 1px solid color-mix(in srgb, var(--error-color, #ef4444) 50%, transparent);
-      color: var(--error-color, #ef4444);
-      margin-bottom: 1rem;
-      font-size: 0.85rem;
-      line-height: 1.4;
-      word-break: break-word;
-    }
     button.ghost {
       padding: 0.75rem 1.5rem;
       border-radius: 10px;
@@ -532,17 +756,25 @@ export class SabWizard extends LitElement {
       font-size: 0.95rem;
       font-family: inherit;
     }
+    button.ghost.small { padding: 0.4rem 0.75rem; font-size: 0.8rem; }
     button.ghost:hover { background: var(--sab-hover); }
 
-    :host([dir="rtl"]) .dev-id,
-    :host([dir="rtl"]) .name-input,
-    :host([dir="rtl"]) .room-name { direction: ltr; text-align: end; unicode-bidi: plaintext; }
+    :host([dir="rtl"]) .dev-id, :host([dir="rtl"]) .input.mono, :host([dir="rtl"]) .room-name { direction: ltr; text-align: end; unicode-bidi: plaintext; }
     :host([dir="rtl"]) .dev { text-align: start; }
   `;
 }
 
-declare global {
-  interface HTMLElementTagNameMap {
-    'sab-wizard': SabWizard;
-  }
+interface TileOverrides {
+  size: TileSize;
+  customName: string;
+  customIcon: string;
+  colorOverride: string;
+  bindings: AttributeBinding[];
 }
+
+function defaultBindingForFamily(family: DeviceFamily): AttributeRender {
+  if (family === 'sensor') return 'sparkline';
+  return 'text';
+}
+
+declare global { interface HTMLElementTagNameMap { 'sab-wizard': SabWizard } }

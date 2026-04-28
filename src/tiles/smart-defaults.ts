@@ -1,33 +1,47 @@
-import type { DeviceFamily, PrimaryAction } from '../types.js';
+import type { AttributeBinding, AttributeRender, DeviceFamily, PrimaryAction, TileSize } from '../types.js';
 
 export interface SmartDefault {
-  attributes: string[];
+  bindings: AttributeBinding[];
   primaryAction: PrimaryAction;
-  hasSlider: boolean;
+  size: TileSize;
 }
 
 export function smartDefaultsFor(family: DeviceFamily): SmartDefault {
   switch (family) {
     case 'light':
-      return { attributes: ['brightness', 'color_mode'], primaryAction: 'toggle', hasSlider: true };
+      return { bindings: [{ attribute: 'brightness', render: 'slider' }], primaryAction: 'toggle', size: 'medium' };
     case 'switch':
-      return { attributes: [], primaryAction: 'toggle', hasSlider: false };
+      return { bindings: [], primaryAction: 'toggle', size: 'small' };
     case 'lock':
-      return { attributes: [], primaryAction: 'lock', hasSlider: false };
+      return { bindings: [], primaryAction: 'lock', size: 'small' };
     case 'cover':
-      return { attributes: ['current_position'], primaryAction: 'open', hasSlider: true };
+      return { bindings: [{ attribute: 'current_position', render: 'slider' }], primaryAction: 'open', size: 'medium' };
     case 'climate':
-      return { attributes: ['current_temperature', 'temperature', 'hvac_mode'], primaryAction: 'none', hasSlider: true };
+      return {
+        bindings: [
+          { attribute: 'current_temperature', render: 'text' },
+          { attribute: 'temperature', render: 'slider' },
+        ],
+        primaryAction: 'none',
+        size: 'medium',
+      };
     case 'fan':
-      return { attributes: ['percentage'], primaryAction: 'toggle', hasSlider: true };
+      return { bindings: [{ attribute: 'percentage', render: 'slider' }], primaryAction: 'toggle', size: 'medium' };
     case 'vacuum':
-      return { attributes: ['battery_level'], primaryAction: 'none', hasSlider: false };
+      return { bindings: [{ attribute: 'battery_level', render: 'badge' }], primaryAction: 'none', size: 'medium' };
     case 'media':
-      return { attributes: ['media_title', 'volume_level'], primaryAction: 'play_pause', hasSlider: false };
+      return {
+        bindings: [
+          { attribute: 'media_title', render: 'text' },
+          { attribute: 'volume_level', render: 'slider' },
+        ],
+        primaryAction: 'play_pause',
+        size: 'large',
+      };
     case 'sensor':
-      return { attributes: ['unit_of_measurement', 'device_class'], primaryAction: 'none', hasSlider: false };
+      return { bindings: [{ attribute: 'state', render: 'sparkline' }], primaryAction: 'none', size: 'medium' };
     case 'binary_sensor':
-      return { attributes: ['device_class'], primaryAction: 'none', hasSlider: false };
+      return { bindings: [], primaryAction: 'none', size: 'small' };
   }
 }
 
@@ -46,7 +60,7 @@ export function familyLabel(family: DeviceFamily): string {
   }
 }
 
-export function familyIcon(family: DeviceFamily): string {
+export function familyEmoji(family: DeviceFamily): string {
   switch (family) {
     case 'light': return '💡';
     case 'switch': return '🔌';
@@ -61,6 +75,35 @@ export function familyIcon(family: DeviceFamily): string {
   }
 }
 
+export function familyMdi(family: DeviceFamily): string {
+  switch (family) {
+    case 'light': return 'mdi:lightbulb';
+    case 'switch': return 'mdi:power-socket';
+    case 'lock': return 'mdi:lock';
+    case 'cover': return 'mdi:window-shutter';
+    case 'climate': return 'mdi:thermostat';
+    case 'fan': return 'mdi:fan';
+    case 'vacuum': return 'mdi:robot-vacuum';
+    case 'media': return 'mdi:television';
+    case 'sensor': return 'mdi:gauge';
+    case 'binary_sensor': return 'mdi:checkbox-blank-circle-outline';
+  }
+}
+
+/** Backwards-compat shim for code paths still using familyIcon. */
+export function familyIcon(family: DeviceFamily): string { return familyEmoji(family); }
+
 export function isOnState(state: string): boolean {
-  return state === 'on' || state === 'open' || state === 'unlocked' || state === 'playing' || state === 'cleaning' || state === 'heat' || state === 'cool' || state === 'auto';
+  return state === 'on' || state === 'open' || state === 'unlocked' || state === 'playing' || state === 'cleaning' || state === 'heat' || state === 'cool' || state === 'auto' || state === 'heat_cool' || state === 'fan_only';
+}
+
+/** Suggest a render style for an attribute we don't have a smart default for. */
+export function suggestRender(attribute: string, value: unknown): AttributeRender {
+  if (typeof value === 'number') {
+    if (/percent|brightness|level|position|volume/i.test(attribute) || (value >= 0 && value <= 100)) {
+      return /battery|signal|level/i.test(attribute) ? 'badge' : 'slider';
+    }
+    return 'text';
+  }
+  return 'text';
 }

@@ -158,6 +158,44 @@ Build size: 79.88 KB / 19.77 KB gzipped. Initial commit `6dd25c7`.
 - [ ] R9. Add a "Dashboard name" input to wizard step 1.
 - [ ] R10. Bump v0.2.0, push, tag, release.
 
+## v0.4.0 - rich customization (2026-04-28)
+
+The wizard gains a Settings step and per-tile/per-attribute controls.
+
+**New wizard flow:** Settings -> Rooms -> Devices -> Tiles.
+
+### Settings step
+- Layout: max columns (1-4), density (compact / comfortable / spacious).
+- Accent color picker (replaces default on-state palette).
+- Icon style: emoji / mdi / off.
+- Background: solid / gradient / image url.
+
+### Per-tile customization
+- Size: small / medium / large (maps to HA grid_options columns).
+- Custom name, custom mdi icon override, color override per tile.
+
+### Per-attribute binding
+- For each attribute the user picks, choose render style:
+  - **Text** - secondary line under the name.
+  - **Slider** - inline editable slider (brightness, fan speed, cover position, target_temperature).
+  - **Badge** - corner chip (battery, signal, etc).
+  - **Sparkline** - inline 24h SVG chart for sensor history.
+
+### Implementation
+- Expand `Tile` and add `DashboardSettings`, `AttributeBinding` types.
+- Bring back `sparkline.ts` (delete-d in v0.2 cleanup) inside the card module.
+- Add `history.ts` real HA fetch via `history/history_during_period` WS.
+- Generator emits a per-tile config carrying all overrides.
+- Custom card renders bindings appropriately, applies icon style + color override.
+
+Steps:
+- [ ] S1. Type expansion: DashboardSettings, AttributeBinding, expand Tile.
+- [ ] S2. Wizard: new Settings step + expanded Tiles step.
+- [ ] S3. Generator: per-tile config with all overrides + dashboard background.
+- [ ] S4. sab-tile-card: render bindings (text / slider / badge / sparkline), apply settings.
+- [ ] S5. Sparkline + HA history fetch.
+- [ ] S6. v0.4.0 build + release.
+
 ## Open questions
 
 - **GitHub repo name**: `ha-smart-assistant-builder` proposed — confirm.

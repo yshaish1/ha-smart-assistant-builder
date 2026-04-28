@@ -19,14 +19,47 @@ export type PrimaryAction =
   | 'none';
 
 export type TileSize = 'small' | 'medium' | 'large';
+export type IconStyle = 'emoji' | 'mdi' | 'off';
+export type Density = 'compact' | 'comfortable' | 'spacious';
+export type AttributeRender = 'text' | 'slider' | 'badge' | 'sparkline';
+
+export interface AttributeBinding {
+  attribute: string;
+  render: AttributeRender;
+  label?: string;
+}
+
+export interface SolidBackground { type: 'solid'; color: string }
+export interface GradientBackground { type: 'gradient'; from: string; to: string }
+export interface ImageBackground { type: 'image'; url: string }
+export type DashboardBackground = SolidBackground | GradientBackground | ImageBackground;
+
+export interface DashboardSettings {
+  maxColumns: 1 | 2 | 3 | 4;
+  density: Density;
+  accentColor: string;
+  iconStyle: IconStyle;
+  background: DashboardBackground;
+}
+
+export const DEFAULT_SETTINGS: DashboardSettings = {
+  maxColumns: 4,
+  density: 'comfortable',
+  accentColor: '#6366f1',
+  iconStyle: 'emoji',
+  background: { type: 'solid', color: '' },
+};
 
 export interface Tile {
   id: string;
   entityId: string;
   family: DeviceFamily;
-  attributes: string[];
-  primaryAction: PrimaryAction;
   size: TileSize;
+  primaryAction: PrimaryAction;
+  bindings: AttributeBinding[];
+  customName?: string;
+  customIcon?: string;
+  colorOverride?: string;
 }
 
 export interface Room {
@@ -41,6 +74,7 @@ export interface Dashboard {
   id: string;
   name: string;
   icon?: string;
+  settings: DashboardSettings;
   rooms: Room[];
 }
 
